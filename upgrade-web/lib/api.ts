@@ -366,6 +366,15 @@ export const api = {
     requestDirect<ArtifactListResponse>(
       `/projects/${encodeURIComponent(id)}/artifacts`,
     ),
+
+  /**
+   * URL for the artifact-load SSE stream.
+   * Emits phase-progress events during git clone / Artifactory download so the
+   * UI can show what is happening on a cold cache (new project / new version).
+   * Bypasses the Next.js dev-proxy (same reason as compareStreamUrl).
+   */
+  artifactsStreamUrl: (id: string) =>
+    `${STREAM_BASE}/projects/${encodeURIComponent(id)}/artifacts/stream`,
   getComparison: (id: string) =>
     request<ComparisonMap>(`/projects/${encodeURIComponent(id)}/comparison`),
 

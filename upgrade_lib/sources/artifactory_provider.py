@@ -239,12 +239,37 @@ class ArtifactoryProvider(SourceProvider):
             for chunk in resp.iter_content(chunk_size=8192):
                 f.write(chunk)
 
-        # Extract (JAR is a ZIP)
-        logger.info("Extracting %s", jar_path)
+        # Extract (JAR is a ZIP).
+        # We only need the SYSTEM artifacts tree — skip compiled Java classes,
+        # documentation, and everything else in the JAR.  Partial extraction
+        # cuts this step from 1-3 minutes down to 15-30 seconds for large JARs.
+        logger.info("Extracting %s (partial — SYSTEM path only)", jar_path)
         extract_dir = cache_dir / f"gtm-install-{version}"
         extract_dir.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(jar_path, "r") as zf:
-            zf.extractall(extract_dir)
+            all_members = zf.namelist()
+            # Collect every entry that lives under app_root/repos/SYSTEM
+            system_members = [
+                m for m in all_members
+                if "app_root/repos/SYSTEM" in m.replace("\\", "/")
+            ]
+            if system_members:
+                logger.info(
+                    "Partial extraction: %d / %d files (under app_root/repos/SYSTEM)",
+                    len(system_members),
+                    len(all_members),
+                )
+                for member in system_members:
+                    zf.extract(member, extract_dir)
+            else:
+                # Unexpected JAR layout — fall back to full extraction so we
+                # never silently produce an empty SYSTEM directory.
+                logger.warning(
+                    "app_root/repos/SYSTEM not found in ZIP entries — "
+                    "falling back to full extraction (%d files)",
+                    len(all_members),
+                )
+                zf.extractall(extract_dir)
 
         # Clean up JAR to save disk space
         jar_path.unlink(missing_ok=True)

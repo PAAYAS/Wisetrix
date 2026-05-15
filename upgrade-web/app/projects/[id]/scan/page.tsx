@@ -37,6 +37,7 @@ import { Input } from "@/components/ui/input";
 const DECISIONS: Decision[] = ["Merge", "Retain", "Remove", "ERROR"];
 const RISKS: RiskLevel[] = ["HIGH", "MEDIUM", "LOW"];
 
+/** Labels shown in the compare-run progress card */
 const PHASE_LABELS: Record<string, string> = {
   resolve: "Resolving sources (git fetch / artifactory)…",
   scan: "Scanning source tree for artifacts…",
@@ -44,6 +45,16 @@ const PHASE_LABELS: Record<string, string> = {
   rollup: "Applying business rules…",
   risk: "Scoring risk for each artifact…",
   done: "Done",
+};
+
+/** Labels shown in the page-load artifact-stream card */
+const LOAD_PHASE_LABELS: Record<string, string> = {
+  cached:                "Using cached paths — ready instantly",
+  git_clone:             "Cloning git repository (first time, shallow)…",
+  git_fetch:             "Fetching latest commits from git…",
+  artifactory_cached:    "Artifactory already extracted locally",
+  artifactory_download:  "Downloading Artifactory JAR…",
+  scan:                  "Scanning artifact tree…",
 };
 
 interface ProgressState {
@@ -70,6 +81,13 @@ export default function ScanPage({ params }: { params: { id: string } }) {
 
   const [meta, setMeta] = React.useState<ArtifactListResponse | null>(null);
   const [metaError, setMetaError] = React.useState<string | null>(null);
+  /** True while the artifact SSE stream is in flight (page-load resolve phase) */
+  const [metaLoading, setMetaLoading] = React.useState(false);
+  /** Current phase emitted by the artifact SSE stream */
+  const [metaPhase, setMetaPhase] = React.useState("");
+  /** Human-readable note emitted alongside the phase */
+  const [metaNote, setMetaNote] = React.useState("");
+
   const [comparison, setComparison] = React.useState<ComparisonMap>({});
   const [projectCfg, setProjectCfg] = React.useState<ProjectConfig | null>(null);
   const [progress, setProgress] = React.useState<ProgressState>({
@@ -85,8 +103,8 @@ export default function ScanPage({ params }: { params: { id: string } }) {
   // Tick once per second while compare is running so elapsed time rerenders.
   React.useEffect(() => {
     if (!progress.running) return;
-    const id = window.setInterval(() => setTick((n) => n + 1), 1000);
-    return () => window.clearInterval(id);
+    const timerId = window.setInterval(() => setTick((n) => n + 1), 1000);
+    return () => window.clearInterval(timerId);
   }, [progress.running]);
 
   const [decisionFilter, setDecisionFilter] = React.useState<Set<Decision>>(
@@ -95,26 +113,83 @@ export default function ScanPage({ params }: { params: { id: string } }) {
   const [riskFilter, setRiskFilter] = React.useState<Set<RiskLevel>>(new Set());
   const [search, setSearch] = React.useState("");
 
-  const loadAll = React.useCallback(async () => {
+  // Ref so we can close the EventSource on unmount or when we re-trigger load
+  const metaEsRef = React.useRef<EventSource | null>(null);
+
+  /**
+   * Load the artifact list via the SSE stream.
+   *
+   * This replaces the old `listArtifacts` fetch: the stream emits phase events
+   * (git_clone, artifactory_download, …) so the user can see what's happening
+   * on a cold cache instead of staring at a blank spinner for 15 minutes.
+   */
+  const loadMeta = React.useCallback(() => {
+    // Close any previous stream before starting a new one
+    metaEsRef.current?.close();
+
     setMetaError(null);
-    try {
-      const [m, c, p] = await Promise.all([
-        api.listArtifacts(id),
-        api.getComparison(id),
-        api.getProject(id),
-      ]);
-      setMeta(m);
-      setComparison(c);
-      setProjectCfg(p.config);
-    } catch (e) {
-      const msg = e instanceof ApiError ? e.message : (e as Error).message;
-      setMetaError(msg);
-    }
+    setMetaLoading(true);
+    setMetaPhase("");
+    setMetaNote("");
+
+    const es = new EventSource(api.artifactsStreamUrl(id));
+    metaEsRef.current = es;
+
+    es.addEventListener("phase", (ev) => {
+      const d = JSON.parse((ev as MessageEvent).data) as {
+        phase: string;
+        note?: string;
+      };
+      setMetaPhase(d.phase ?? "");
+      setMetaNote(d.note ?? "");
+    });
+
+    es.addEventListener("done", (ev) => {
+      const d = JSON.parse((ev as MessageEvent).data) as ArtifactListResponse;
+      setMeta(d);
+      setMetaLoading(false);
+      setMetaPhase("");
+      es.close();
+      metaEsRef.current = null;
+    });
+
+    es.addEventListener("error", (ev) => {
+      // SSE fires a generic Event on network error, or our custom error event
+      // has a `data` field. Try to parse the data first.
+      try {
+        const d = JSON.parse((ev as MessageEvent).data) as { message?: string };
+        setMetaError(d.message ?? "Failed to load artifacts");
+      } catch {
+        setMetaError("Failed to load artifacts — check the backend is running");
+      }
+      setMetaLoading(false);
+      es.close();
+      metaEsRef.current = null;
+    });
   }, [id]);
 
+  /** Reload comparison results + project config (fast — no external I/O). */
+  const loadComparison = React.useCallback(() => {
+    void Promise.all([api.getComparison(id), api.getProject(id)]).then(
+      ([c, p]) => {
+        setComparison(c);
+        setProjectCfg(p.config);
+      },
+    ).catch(() => {
+      // Non-fatal — new projects have no comparison yet
+    });
+  }, [id]);
+
+  // On mount: start the artifact stream + load comparison in parallel.
+  // On unmount: close the stream to avoid memory leaks.
   React.useEffect(() => {
-    void loadAll();
-  }, [loadAll]);
+    loadMeta();
+    loadComparison();
+    return () => {
+      metaEsRef.current?.close();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   const runCompare = () => {
     if (progress.running) return;
@@ -172,7 +247,9 @@ export default function ScanPage({ params }: { params: { id: string } }) {
       }));
       toast.success(`Compared ${data.total} artifacts`);
       es.close();
-      void loadAll();
+      // Reload artifact meta (cache is now warm — stream completes in seconds)
+      loadMeta();
+      loadComparison();
     });
   };
 
@@ -242,8 +319,8 @@ export default function ScanPage({ params }: { params: { id: string } }) {
           </Button>
           <Button
             variant="outline"
-            onClick={() => void loadAll()}
-            disabled={progress.running}
+            onClick={() => { loadMeta(); loadComparison(); }}
+            disabled={progress.running || metaLoading}
           >
             <RefreshCcw className="h-4 w-4" />
             Reload
@@ -258,6 +335,21 @@ export default function ScanPage({ params }: { params: { id: string } }) {
           </Button>
         </div>
       </header>
+
+      {/* Artifact-load progress — shown while the SSE resolve stream is running */}
+      {metaLoading && (
+        <Card className="mt-8 border-primary/30 bg-primary/5">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm font-medium">
+              <Loader2 className="h-4 w-4 animate-spin text-primary" />
+              {LOAD_PHASE_LABELS[metaPhase] ?? metaPhase ?? "Initializing…"}
+            </CardTitle>
+            {metaNote && (
+              <CardDescription>{metaNote}</CardDescription>
+            )}
+          </CardHeader>
+        </Card>
+      )}
 
       {metaError && (
         <Card className="mt-8 border-destructive/40 bg-destructive/5">

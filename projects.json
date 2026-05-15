@@ -6,6 +6,7 @@
     "baseline_version": "24.4.11",
     "git_branch": "24.4.11-7",
     "git_url": "https://git.dev.e2open.com/scm/ser/aldi_app.git",
+    "jira_project_url": "https://jira.dev.e2open.com/jira/projects/ALDIBR1",
     "merge_output_dir": "./output/ALDI",
     "source_subpath": "client_delivery/src/main/resources/app_root/repos",
     "source_type": "git",

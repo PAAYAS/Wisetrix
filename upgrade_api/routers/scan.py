@@ -8,6 +8,7 @@ POST /projects/{id}/compare/stream   -> run compare with SSE progress events
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
@@ -19,6 +20,41 @@ from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 logger = logging.getLogger(__name__)
+
+# Mirror the cache root constants from the provider modules so we can do
+# pre-checks (is the git repo already cloned? is the version already extracted?)
+# without importing provider internals.
+_GIT_CACHE_ROOT = Path.home() / ".yantrix" / "git_cache"
+_ART_CACHE_ROOT = Path.home() / ".yantrix" / "artifactory_cache"
+
+
+def _git_clone_exists(git_url: str) -> bool:
+    """True if a shallow clone for this URL already lives in the git cache."""
+    h = hashlib.sha256(git_url.encode()).hexdigest()[:12]
+    d = _GIT_CACHE_ROOT / h
+    return d.exists() and (d / ".git").exists()
+
+
+def _art_version_cached(version: str) -> bool:
+    """True if the Artifactory JAR for this version was already extracted."""
+    if not version:
+        return False
+    cache_dir = _ART_CACHE_ROOT / version
+    if not cache_dir.exists():
+        return False
+    # Fast path: sidecar file written by ArtifactoryProvider after first extract
+    sidecar = cache_dir / ".yantrix_system_path"
+    if sidecar.exists():
+        try:
+            p = Path(sidecar.read_text(encoding="utf-8").strip())
+            return p.is_dir()
+        except Exception:
+            pass
+    # Slow path: look for any SYSTEM directory
+    for p in cache_dir.rglob("SYSTEM"):
+        if p.is_dir():
+            return True
+    return False
 
 from upgrade_api.paths import (
     comparison_path,
@@ -121,6 +157,131 @@ async def list_artifacts(project_id: str) -> dict:
         "artifacts": artifacts,
         "count": len(artifacts),
     }
+
+
+async def _artifacts_stream(project_id: str) -> AsyncIterator[dict]:
+    """
+    SSE stream for the initial artifact load.
+
+    Emits progress events so the UI can show what's happening when the cache is
+    cold (first-time git clone + Artifactory download). Each event has:
+
+      phase  { phase: str, note: str }  — current step label + human description
+      error  { message: str }           — fatal, stream ends
+      done   { ArtifactListResponse }   — success, stream ends
+    """
+
+    def _phase(phase: str, note: str = "") -> dict:
+        return {"event": "phase", "data": json.dumps({"phase": phase, "note": note})}
+
+    project = _get_project(project_id)
+    logger.info("artifacts_stream: project=%s", project_id)
+
+    # ── Fast path: disk-cached resolved paths ────────────────────────────────
+    cached = load_json(resolved_paths_path(project_id), None)
+    if _resolved_paths_are_usable(cached):
+        logger.debug("artifacts_stream: disk cache hit for %s", project_id)
+        yield _phase("cached", "Using cached paths — skipping git / Artifactory.")
+        resolved = cached
+    else:
+        # ── Announce what is about to happen ─────────────────────────────────
+        source_type = project.get("source_type", "local")
+        target_type = project.get("target_type", "local")
+
+        if source_type == "git":
+            git_url = project.get("git_url", "")
+            if _git_clone_exists(git_url):
+                yield _phase("git_fetch", "Fetching latest commits from git…")
+            else:
+                yield _phase(
+                    "git_clone",
+                    "Cloning git repository for the first time. "
+                    "Using a shallow clone (--depth=1) — usually 30–90 s…",
+                )
+
+        if target_type == "artifactory":
+            version = project.get("target_version", "")
+            if _art_version_cached(version):
+                yield _phase(
+                    "artifactory_cached",
+                    f"Artifactory v{version} already extracted locally.",
+                )
+            else:
+                yield _phase(
+                    "artifactory_download",
+                    f"Downloading Artifactory JAR for v{version} "
+                    "(first time — usually 1–3 min)…",
+                )
+
+        # ── Run resolve in a worker thread (I/O bound) ───────────────────────
+        try:
+            resolved = await anyio.to_thread.run_sync(
+                lambda: resolve_project_paths(project, skip_pull=True)
+            )
+        except Exception as e:
+            logger.error(
+                "artifacts_stream: resolve failed for %s: %s",
+                project_id, e, exc_info=True,
+            )
+            yield {"event": "error", "data": json.dumps({"message": str(e)})}
+            return
+
+        save_json(
+            resolved_paths_path(project_id),
+            {k: v for k, v in resolved.items() if not k.startswith("_")},
+        )
+
+    # ── Scan artifact tree ────────────────────────────────────────────────────
+    source_root = Path(resolved.get("source_root", ""))
+    if not resolved.get("source_root") or not source_root.exists():
+        msg = f"Source root not found or not configured: {resolved.get('source_root')!r}"
+        logger.error("artifacts_stream: %s for %s", msg, project_id)
+        yield {"event": "error", "data": json.dumps({"message": msg})}
+        return
+
+    yield _phase("scan", "Scanning artifact tree…")
+    try:
+        artifacts = await anyio.to_thread.run_sync(
+            lambda: scan_artifacts(source_root, project_id=project_id)
+        )
+    except Exception as e:
+        logger.error(
+            "artifacts_stream: scan failed for %s: %s", project_id, e, exc_info=True
+        )
+        yield {"event": "error", "data": json.dumps({"message": f"Scan failed: {e}"})}
+        return
+
+    buckets = sorted({a["bucket"] for a in artifacts})
+    logger.info(
+        "artifacts_stream: done — %d artifacts, %d buckets for %s",
+        len(artifacts), len(buckets), project_id,
+    )
+
+    yield {
+        "event": "done",
+        "data": json.dumps({
+            "project_id": project_id,
+            "source_root": resolved["source_root"],
+            "target_system": resolved.get("target_system", ""),
+            "baseline_system": resolved.get("baseline_system", ""),
+            "git_metadata": resolved.get("_git_metadata"),
+            "buckets": buckets,
+            "artifacts": artifacts,
+            "count": len(artifacts),
+        }),
+    }
+
+
+@router.get("/artifacts/stream")
+async def get_artifacts_stream(project_id: str):
+    """
+    SSE stream for initial artifact loading.
+
+    Emits phase-progress events during git clone / Artifactory download so the
+    UI can show what's happening instead of an unexplained spinner.
+    Use EventSource on the client (bypasses the Next.js dev-proxy timeout).
+    """
+    return EventSourceResponse(_artifacts_stream(project_id))
 
 
 @router.get("/comparison")
