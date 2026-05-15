@@ -4,7 +4,7 @@
  */
 
 /**
- * Absolute base URL for SSE streams.
+ * Absolute base URL for SSE streams and long-running direct calls.
  *
  * EventSource MUST bypass the Next dev rewrites: the rewrites proxy gzips
  * responses for any browser that sends `Accept-Encoding: gzip` (which Chrome
@@ -16,6 +16,57 @@
  */
 const STREAM_BASE =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+
+/** Send a structured log entry to the backend so it lands in yantrix.log. */
+function logToBackend(
+  level: "debug" | "info" | "warn" | "error",
+  message: string,
+  context?: Record<string, unknown>,
+): void {
+  // Fire-and-forget — never let logging errors surface to the user
+  fetch(`${STREAM_BASE}/log`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ level, message, context: context ?? {} }),
+  }).catch(() => undefined);
+}
+
+/**
+ * Extract a human-readable string from a FastAPI error response payload.
+ *
+ * FastAPI/Pydantic validation errors return `detail` as an array of objects
+ * like `[{type, loc, msg, input, url}]`. Calling String() on an array of
+ * objects produces "[object Object]", so we handle both shapes here.
+ */
+function extractDetail(payload: unknown, fallback: string): string {
+  if (!payload || typeof payload !== "object") return fallback;
+  const p = payload as Record<string, unknown>;
+  if (!("detail" in p)) return fallback;
+
+  const detail = p.detail;
+
+  if (typeof detail === "string") return detail;
+
+  if (Array.isArray(detail)) {
+    // Pydantic v2 validation error array — join the human-readable msg fields
+    const messages = detail
+      .map((d) => {
+        if (typeof d === "string") return d;
+        if (d && typeof d === "object") {
+          const obj = d as Record<string, unknown>;
+          const loc = Array.isArray(obj.loc) ? obj.loc.join(" → ") : "";
+          const msg = typeof obj.msg === "string" ? obj.msg : JSON.stringify(obj);
+          return loc ? `${loc}: ${msg}` : msg;
+        }
+        return JSON.stringify(d);
+      })
+      .filter(Boolean)
+      .join("; ");
+    return messages || fallback;
+  }
+
+  return String(detail) || fallback;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -243,12 +294,12 @@ async function requestDirect<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* fall through */
     }
-    const detail =
-      payload &&
-      typeof payload === "object" &&
-      "detail" in (payload as Record<string, unknown>)
-        ? String((payload as { detail: unknown }).detail)
-        : `API ${res.status} on ${path}`;
+    const detail = extractDetail(payload, `API ${res.status} on ${path}`);
+    logToBackend("error", `[requestDirect] ${res.status} ${path}`, {
+      status: res.status,
+      detail,
+      payload,
+    });
     throw new ApiError(detail, res.status, payload);
   }
   if (res.status === 204) return undefined as T;
@@ -272,12 +323,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // fall through
     }
-    const detail =
-      payload &&
-      typeof payload === "object" &&
-      "detail" in (payload as Record<string, unknown>)
-        ? String((payload as { detail: unknown }).detail)
-        : `API ${res.status} on ${path}`;
+    const detail = extractDetail(payload, `API ${res.status} on ${path}`);
+    logToBackend("error", `[request] ${res.status} ${path}`, {
+      status: res.status,
+      detail,
+      payload,
+    });
     throw new ApiError(detail, res.status, payload);
   }
   if (res.status === 204) return undefined as T;
@@ -308,8 +359,11 @@ export const api = {
     }),
 
   // Scan & Compare
+  // Uses requestDirect (hits localhost:8000 directly) to bypass the Next.js
+  // dev-proxy ~30s socket timeout — artifact resolution can take 60-120s on
+  // a cold cache when pulling from git/artifactory.
   listArtifacts: (id: string) =>
-    request<ArtifactListResponse>(
+    requestDirect<ArtifactListResponse>(
       `/projects/${encodeURIComponent(id)}/artifacts`,
     ),
   getComparison: (id: string) =>

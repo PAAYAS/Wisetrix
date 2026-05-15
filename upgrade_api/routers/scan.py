@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator
@@ -16,6 +17,8 @@ from typing import AsyncIterator
 import anyio
 from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
+
+logger = logging.getLogger(__name__)
 
 from upgrade_api.paths import (
     comparison_path,
@@ -59,14 +62,17 @@ def _resolved_paths_are_usable(resolved: dict | None) -> bool:
 @router.get("/artifacts")
 async def list_artifacts(project_id: str) -> dict:
     project = _get_project(project_id)
+    logger.info("list_artifacts: project=%s", project_id)
 
     # Fast path: prior scan persisted resolved paths to disk. Use that to
     # avoid hitting git / artifactory on every page load — that's what was
     # causing the Next.js proxy to time out with ECONNRESET.
     cached = load_json(resolved_paths_path(project_id), None)
     if _resolved_paths_are_usable(cached):
+        logger.debug("list_artifacts: using cached resolved paths for %s", project_id)
         resolved = cached
     else:
+        logger.info("list_artifacts: resolving paths for %s (cache miss)", project_id)
         try:
             # Offload resolve to a thread so the request stays responsive
             # and so we don't block the event loop while git/artifactory work.
@@ -74,6 +80,7 @@ async def list_artifacts(project_id: str) -> dict:
                 lambda: resolve_project_paths(project, skip_pull=True)
             )
         except Exception as e:
+            logger.error("list_artifacts: path resolution failed for %s: %s", project_id, e, exc_info=True)
             raise HTTPException(status_code=400, detail=f"Failed to resolve paths: {e}")
         # Persist for next time, stripping internal metadata keys.
         save_json(
@@ -83,15 +90,26 @@ async def list_artifacts(project_id: str) -> dict:
 
     source_root = Path(resolved["source_root"])
     if not resolved["source_root"] or not source_root.exists():
+        logger.error(
+            "list_artifacts: source root not found for %s: %r",
+            project_id,
+            resolved["source_root"],
+        )
         raise HTTPException(
             status_code=400,
             detail=f"Source root not found or not configured: {resolved['source_root']!r}",
         )
 
-    artifacts = await anyio.to_thread.run_sync(
-        lambda: scan_artifacts(source_root, project_id=project_id)
-    )
+    try:
+        artifacts = await anyio.to_thread.run_sync(
+            lambda: scan_artifacts(source_root, project_id=project_id)
+        )
+    except Exception as e:
+        logger.error("list_artifacts: scan failed for %s: %s", project_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Artifact scan failed: {e}")
+
     buckets = sorted({a["bucket"] for a in artifacts})
+    logger.info("list_artifacts: found %d artifacts in %d buckets for %s", len(artifacts), len(buckets), project_id)
 
     return {
         "project_id": project_id,
@@ -120,6 +138,7 @@ def get_risk(project_id: str) -> dict:
 async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
     """Yield SSE events while running the deterministic compare pipeline."""
     project = _get_project(project_id)
+    logger.info("compare_stream: starting for project=%s", project_id)
 
     yield {"event": "phase", "data": json.dumps({"phase": "resolve"})}
     try:
@@ -130,6 +149,7 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
             lambda: resolve_project_paths(project)
         )
     except Exception as e:
+        logger.error("compare_stream: resolve failed for %s: %s", project_id, e, exc_info=True)
         yield {"event": "error", "data": json.dumps({"message": str(e)})}
         return
 
@@ -192,6 +212,7 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
             comp_results[key] = {**meta, **result}
             decision = result.get("decision", "?")
         except Exception as e:
+            logger.error("compare_stream: error comparing %s in %s: %s", key, project_id, e, exc_info=True)
             comp_results[key] = {**meta, "decision": "ERROR", "error": str(e)}
             decision = "ERROR"
 
