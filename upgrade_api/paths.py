@@ -30,6 +30,10 @@ def jira_tickets_path(project_id: str) -> Path:
     return RUN_STATE_DIR / f"{project_id}.jira_tickets.json"
 
 
+def jira_sources_path(project_id: str) -> Path:
+    return RUN_STATE_DIR / f"{project_id}.jira_sources.json"
+
+
 def resolved_paths_path(project_id: str) -> Path:
     """Stores the most recent successfully-resolved source/target/baseline
     paths, so merge can skip the resolve providers entirely."""

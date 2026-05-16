@@ -60,7 +60,7 @@ export default function ProjectSetupPage({
             Yantrix — {id}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Edit this project&apos;s source, target SYSTEM, and baseline.
+            Edit this project&apos;s source, target version, and baseline.
           </p>
         </div>
         <Button asChild variant="outline">

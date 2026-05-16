@@ -383,54 +383,68 @@ class JiraClient:
         self,
         project_key: str,
         artifact_keys: list[str],
-    ) -> dict[str, str]:
+        git_hits: dict[str, set[str]] | None = None,
+    ) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
         """
-        Fetch all issues from a JIRA project and smart-match to artifacts.
+        Match artifacts to JIRA tickets (git-first, keyword fallback).
 
-        For each artifact (e.g. "ti.tx.edit.PCEEdit"), extracts keywords by:
-          1. Splitting on dots and camelCase boundaries
-          2. Expanding known GTM abbreviations (PCE → Pre Customs Entry, etc.)
-          3. Including the category path (windowdefs, validationsets, etc.)
+        Strategy:
+          1. If git commit history contains JIRA keys for this artifact, use
+             those directly — commit messages are direct evidence.
+          2. Only if git found nothing, fall back to keyword matching against
+             all JIRA issue summaries + descriptions in the project.
 
-        Then searches issue summaries + descriptions for those keywords and
-        returns *every* issue with at least one keyword hit, sorted by score
-        descending (then by issue key for stable ordering).
-
-        Returns dict mapping artifact_key → comma-separated JIRA issue keys
-        (or "Not Found" when nothing matches).
+        Returns:
+            matched:  artifact_key → comma-separated ticket keys (or "Not Found")
+            sources:  artifact_key → {ticket_key → "git" | "keyword"}
+                      lets callers show where each ticket was found
         """
         if not self.enabled:
-            return {k: "Not Found" for k in artifact_keys}
+            empty_sources: dict[str, dict[str, str]] = {}
+            return {k: "Not Found" for k in artifact_keys}, empty_sources
 
-        all_issues = self.get_project_issues_with_descriptions(project_key)
-        if not all_issues:
-            return {k: "Not Found" for k in artifact_keys}
+        need_keyword: list[str] = []
+        matched: dict[str, str] = {}
+        sources: dict[str, dict[str, str]] = {}
 
-        result: dict[str, str] = {}
         for art_key in artifact_keys:
-            keywords = _extract_keywords(art_key)
-            matches: list[tuple[int, str]] = []
+            git_confirmed: set[str] = git_hits.get(art_key, set()) if git_hits else set()
+            if git_confirmed:
+                sorted_keys = sorted(git_confirmed)
+                matched[art_key] = ", ".join(sorted_keys)
+                sources[art_key] = {k: "git" for k in sorted_keys}
+            else:
+                need_keyword.append(art_key)
 
-            for issue in all_issues:
-                text = f"{issue['summary']} {issue['description']}".lower()
-                score = sum(1 for kw in keywords if kw in text)
-                if score >= 1:
-                    matches.append((score, issue["key"]))
+        # Keyword match only for artifacts with no git evidence
+        if need_keyword:
+            all_issues = self.get_project_issues_with_descriptions(project_key)
+            for art_key in need_keyword:
+                keywords = _extract_keywords(art_key)
+                hits: list[tuple[int, str]] = []
 
-            if not matches:
-                result[art_key] = "Not Found"
-                continue
+                for issue in all_issues:
+                    text = f"{issue['summary']} {issue['description']}".lower()
+                    kw_score = sum(1 for kw in keywords if kw in text)
+                    if kw_score >= 1:
+                        hits.append((kw_score, issue["key"]))
 
-            # Sort by score desc, then key asc for deterministic output.
-            matches.sort(key=lambda m: (-m[0], m[1]))
-            result[art_key] = ", ".join(key for _score, key in matches)
+                if not hits:
+                    matched[art_key] = "Not Found"
+                    continue
 
-        return result
+                hits.sort(key=lambda m: (-m[0], m[1]))
+                ticket_keys = [k for _, k in hits]
+                matched[art_key] = ", ".join(ticket_keys)
+                sources[art_key] = {k: "keyword" for k in ticket_keys}
+
+        return matched, sources
 
 
 # ---------------------------------------------------------------------------
 # Keyword extraction for smart artifact ↔ JIRA matching
 # ---------------------------------------------------------------------------
+
 
 # Known GTM abbreviations → expanded forms
 _GTM_ABBREVIATIONS: dict[str, list[str]] = {
@@ -471,6 +485,26 @@ _GTM_ABBREVIATIONS: dict[str, list[str]] = {
     "proc": ["processing"],
 }
 
+# Tokens that appear across nearly every GTM artifact and carry no discriminating
+# signal — skipped both as raw tokens and as abbreviation expansion targets.
+_STOP_TOKENS: frozenset[str] = frozenset({
+    # Near-universal namespace prefixes
+    "ti", "tx",
+    # Generic action/UI suffixes
+    "edit", "add", "new", "create", "view", "list",
+    "detail", "details", "header", "line", "summary",
+    "info", "base", "main", "common",
+    # Generic GTM abbreviations whose expansions are equally broad
+    "gen", "mgmt", "admin", "config", "proc",
+    "rpt", "srch", "ws", "ds", "vs", "wd",
+    "imp", "exp", "adhoc",
+    # Expanded forms that match entire project scopes
+    "trade", "trade intelligence", "transaction",
+    "general", "management", "administration", "configuration", "processing",
+    "workspace", "dataset", "validation set", "window def", "windowdef",
+    "report", "search", "import", "export",
+})
+
 
 def _split_camel_case(name: str) -> list[str]:
     """Split camelCase/PascalCase into words.
@@ -487,11 +521,10 @@ def _split_camel_case(name: str) -> list[str]:
 
 def _extract_keywords(artifact_key: str) -> list[str]:
     """
-    Extract search keywords from an artifact key.
+    Extract search keywords from an artifact key, filtering stop tokens.
 
     Input:  "ALDI/windowdefs/ti.tx.edit.PCEEdit"
-    Output: ["windowdefs", "ti", "tx", "transaction", "trade",
-             "edit", "pce", "pre customs entry", "pceedit"]
+    Output: ["windowdefs", "pce", "pre customs entry", "pre-customs", "pceedit"]
     """
     keywords: list[str] = []
 
@@ -500,8 +533,13 @@ def _extract_keywords(artifact_key: str) -> list[str]:
     # Include category (windowdefs, validationsets, datasets, actions, etc.)
     if len(parts) >= 2:
         category = parts[-2] if len(parts) >= 2 else ""
-        # Skip bucket names like "ALDI", "SYSTEM"
-        if category and category.lower() not in ("system",) and not category.isupper():
+        # Skip bucket names like "ALDI", "SYSTEM" and stop tokens
+        if (
+            category
+            and category.lower() not in _STOP_TOKENS
+            and category.lower() not in ("system",)
+            and not category.isupper()
+        ):
             keywords.append(category.lower())
 
     # Artifact name is last segment
@@ -512,29 +550,36 @@ def _extract_keywords(artifact_key: str) -> list[str]:
 
     for part in dot_parts:
         part_lower = part.lower()
-        # Add the part itself
-        if len(part_lower) >= 2:
+
+        # Add the raw token only if not a stop token
+        if len(part_lower) >= 2 and part_lower not in _STOP_TOKENS:
             keywords.append(part_lower)
 
-        # Expand abbreviations
+        # Expand abbreviations, filtering stop expansions
         if part_lower in _GTM_ABBREVIATIONS:
-            keywords.extend(_GTM_ABBREVIATIONS[part_lower])
+            for expanded in _GTM_ABBREVIATIONS[part_lower]:
+                if expanded not in _STOP_TOKENS and expanded not in keywords:
+                    keywords.append(expanded)
 
         # Split camelCase: PCEEdit → [PCE, Edit]
         camel_parts = _split_camel_case(part)
         for cp in camel_parts:
             cp_lower = cp.lower()
-            if cp_lower not in keywords and len(cp_lower) >= 2:
+            if cp_lower not in _STOP_TOKENS and cp_lower not in keywords and len(cp_lower) >= 2:
                 keywords.append(cp_lower)
-            # Expand abbreviations from camelCase parts
+            # Expand abbreviations from camelCase parts, filtering stop expansions
             if cp_lower in _GTM_ABBREVIATIONS:
                 for expanded in _GTM_ABBREVIATIONS[cp_lower]:
-                    if expanded not in keywords:
+                    if expanded not in _STOP_TOKENS and expanded not in keywords:
                         keywords.append(expanded)
 
-    # Add full name without dots as well
+    # Add full name without dots — only if it differs meaningfully from existing tokens
     full_name_lower = name.replace(".", "").lower()
-    if full_name_lower not in keywords and len(full_name_lower) >= 3:
+    if (
+        full_name_lower not in _STOP_TOKENS
+        and full_name_lower not in keywords
+        and len(full_name_lower) >= 3
+    ):
         keywords.append(full_name_lower)
 
     # Deduplicate while preserving order

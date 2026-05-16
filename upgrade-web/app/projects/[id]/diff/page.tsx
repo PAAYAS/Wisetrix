@@ -152,7 +152,7 @@ export default function DiffPage({ params }: { params: { id: string } }) {
             Yantrix — {id} · Diff &amp; Review
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Side-by-side diffs of each merged file plus the Claude structured
+            Side-by-side diffs of each merged file plus the AI-generated
             review.
           </p>
         </div>
@@ -295,7 +295,7 @@ export default function DiffPage({ params }: { params: { id: string } }) {
                   <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
                     <div>
                       <CardTitle className="text-sm font-medium">
-                        Claude review
+                        AI review
                       </CardTitle>
                       <CardDescription className="text-xs">
                         Structured PASS / WARN / FAIL verdict + findings.

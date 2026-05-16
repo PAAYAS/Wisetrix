@@ -119,6 +119,9 @@ class UpgradeClient:
         all_results: Any,
         risk_assessments: dict | None = None,
         quality_results: dict | None = None,
+        project_id: str | None = None,
     ) -> str:
         """Enhanced summary with risk + quality context."""
-        return self._summary.summarize(all_results, risk_assessments, quality_results)
+        return self._summary.summarize(
+            all_results, risk_assessments, quality_results, project_id=project_id
+        )

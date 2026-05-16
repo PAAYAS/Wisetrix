@@ -41,7 +41,7 @@ const RISKS: RiskLevel[] = ["HIGH", "MEDIUM", "LOW"];
 const PHASE_LABELS: Record<string, string> = {
   resolve: "Resolving sources (git fetch / artifactory)…",
   scan: "Scanning source tree for artifacts…",
-  compare: "Comparing against target SYSTEM…",
+  compare: "Comparing against target version…",
   rollup: "Applying business rules…",
   risk: "Scoring risk for each artifact…",
   done: "Done",
@@ -306,7 +306,7 @@ export default function ScanPage({ params }: { params: { id: string } }) {
             Yantrix — {id} · Scan &amp; Compare
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Deterministic compare — runs locally with no Claude calls. Each
+            Deterministic compare — runs locally with no AI calls. Each
             artifact gets a decision (Merge / Retain / Remove) and a risk level.
           </p>
         </div>
@@ -590,7 +590,7 @@ export default function ScanPage({ params }: { params: { id: string } }) {
               </CardTitle>
               <CardDescription>
                 Click <strong>Run compare</strong> to scan {meta.count}{" "}
-                artifacts against the target SYSTEM.
+                artifacts against the target version.
               </CardDescription>
             </CardHeader>
           </Card>

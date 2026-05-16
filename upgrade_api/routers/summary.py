@@ -94,7 +94,9 @@ async def regenerate_narrative(project_id: str) -> dict:
     client = UpgradeClient()
     narrative = await anyio.to_thread.run_sync(
         lambda: client.generate_summary_enhanced(
-            comp, risk_assessments=risks if risks else None
+            comp,
+            risk_assessments=risks if risks else None,
+            project_id=project_id,
         )
     )
     saved = {

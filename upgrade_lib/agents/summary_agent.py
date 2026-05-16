@@ -14,7 +14,7 @@ from upgrade_lib.agents.base_agent import BaseAgent
 from upgrade_lib import prompts
 
 
-_SUMMARY_PROMPT_ENHANCED = """Generate an executive summary narrative from the run results below.
+_SUMMARY_PROMPT_ENHANCED = """Generate an executive summary narrative for the **{project_name}** upgrade run.
 
 # Aggregate counts
 {aggregate_summary}
@@ -36,7 +36,7 @@ _SUMMARY_PROMPT_ENHANCED = """Generate an executive summary narrative from the r
 
 # Your Task
 
-Produce a markdown summary with:
+Produce a markdown summary referring to this upgrade as the **{project_name}** upgrade throughout. Include:
 - ## Overview — totals by decision (Merge / Retain / Remove), risk distribution (HIGH/MEDIUM/LOW)
 - ## Quality Gate Summary — PASS/WARN/FAIL counts, any blocking findings
 - ## High-Risk Merges — artifacts scored HIGH that need manual attention (table: artifact, risk factors, review verdict)
@@ -44,7 +44,7 @@ Produce a markdown summary with:
 - ## Risks / Warnings — flagged reviews, potential regressions
 - ## Next Steps — recommended actions for the engineer (prioritized by risk)
 
-Keep it concise but actionable. Prioritize HIGH-risk items at the top.
+Keep it concise but actionable. Prioritize HIGH-risk items at the top. Do not use the word "CargoWise".
 """
 
 
@@ -152,6 +152,7 @@ class SummaryAgent(BaseAgent):
         all_results: Any,
         risk_assessments: dict | None = None,
         quality_results: dict | None = None,
+        project_id: str | None = None,
     ) -> str:
         """
         Generate executive narrative summary.
@@ -160,10 +161,19 @@ class SummaryAgent(BaseAgent):
             all_results: Comparison + merge results (dict or JSON string)
             risk_assessments: Optional risk scores per artifact
             quality_results: Optional quality gate results per artifact
+            project_id: Project identifier used to name the upgrade in the narrative
+                        (e.g. "ALDI" → "ALDI GTM Upgrade")
 
         Returns:
             Markdown string with structured summary.
         """
+        # Derive a human-friendly upgrade name from the project ID.
+        # "ALDI-2-upgrade" → "ALDI", "EMRSN" → "EMRSN", None → "GTM"
+        if project_id:
+            customer = project_id.split("-")[0].upper()
+            project_name = f"{customer} GTM Upgrade"
+        else:
+            project_name = "GTM Upgrade"
         if isinstance(all_results, str):
             # Caller already serialized — fall back to legacy single-blob behaviour
             # but truncate aggressively so we never exceed CLI prompt limits.
@@ -199,6 +209,7 @@ class SummaryAgent(BaseAgent):
             quality_summary = json.dumps(verdicts, indent=2)
 
         prompt = _SUMMARY_PROMPT_ENHANCED.format(
+            project_name=project_name,
             aggregate_summary=aggregate_summary,
             risk_summary=risk_summary,
             quality_summary=quality_summary,

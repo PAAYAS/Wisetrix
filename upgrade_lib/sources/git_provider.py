@@ -334,7 +334,21 @@ class GitProvider(SourceProvider):
         repo = gitpython.Repo(clone_dir)
         jira_key_re = re.compile(r"\b([A-Z][A-Z0-9_]+-\d+)\b")
 
+        # The repo was cloned/fetched with --depth=1 for performance.  Deepen
+        # it now so we can walk enough history to find artifact-touching commits.
+        # depth=500 is a reasonable trade-off: fast (only the delta is fetched)
+        # and covers typical release cycles.
+        try:
+            repo.git.fetch("origin", branch, "--depth=500", "--no-tags")
+            logger.debug("Deepened clone of %s to depth=500 for JIRA scan", clone_dir.name)
+        except Exception as e:
+            logger.warning("Could not deepen clone for JIRA scan: %s", e)
+
         result: dict[str, set[str]] = {}
+        commits_scanned = 0
+        commits_with_jira_keys = 0
+        sample_commit_messages: list[str] = []
+        sample_changed_paths: list[str] = []
 
         # Walk commits on the branch (limit to last 500 for performance)
         try:
@@ -342,10 +356,16 @@ class GitProvider(SourceProvider):
         except Exception:
             commits = list(repo.iter_commits(max_count=500))
 
+        commits_scanned = len(commits)
+
         for commit in commits:
             keys = jira_key_re.findall(commit.message)
             if not keys:
                 continue
+
+            commits_with_jira_keys += 1
+            if len(sample_commit_messages) < 3:
+                sample_commit_messages.append(commit.message.strip()[:120])
 
             # Get files changed in this commit
             try:
@@ -362,6 +382,9 @@ class GitProvider(SourceProvider):
             except Exception:
                 continue
 
+            if len(sample_changed_paths) < 5:
+                sample_changed_paths.extend(changed_paths[:3])
+
             for path in changed_paths:
                 # Match against artifact paths if provided
                 if artifact_paths:
@@ -374,5 +397,12 @@ class GitProvider(SourceProvider):
                         result.setdefault(matched_artifact, set()).update(keys)
                 else:
                     result.setdefault(path, set()).update(keys)
+
+        self._last_scan_debug = {
+            "commits_scanned": commits_scanned,
+            "commits_with_jira_keys": commits_with_jira_keys,
+            "sample_commit_messages": sample_commit_messages,
+            "sample_changed_paths": sample_changed_paths[:10],
+        }
 
         return result

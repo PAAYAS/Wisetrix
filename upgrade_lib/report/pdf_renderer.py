@@ -513,9 +513,9 @@ def _section_cover(
     # Plain-language summary
     flow.append(Paragraph("What this report covers", STYLES["H2"]))
     flow.append(Paragraph(
-        "This report describes the outcome of upgrading the customer's GTM/CargoWise "
-        "customizations onto the new SYSTEM release. It lists every customized artifact "
-        "we found, the action taken for each (merge into the new SYSTEM, keep as-is, "
+        "This report describes the outcome of upgrading the customer's GTM "
+        "customizations onto the new target version. It lists every customized artifact "
+        "we found, the action taken for each (merge into the new version, keep as-is, "
         "or remove because it's now redundant), and the risk and quality status of every "
         "merge. The intent is that any reader — engineer or stakeholder — can see the "
         "shape of the upgrade and identify items that need attention.",

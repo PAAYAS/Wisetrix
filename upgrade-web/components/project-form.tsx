@@ -304,7 +304,7 @@ function TargetSection({ config, update }: SectionProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Target SYSTEM</CardTitle>
+        <CardTitle>Target Version</CardTitle>
         <CardDescription>
           The release the customer is upgrading to.
         </CardDescription>
@@ -351,7 +351,7 @@ function TargetSection({ config, update }: SectionProps) {
           </div>
         ) : (
           <Field
-            label="Target SYSTEM path"
+            label="Target version path"
             placeholder="C:/path/to/SYSTEM"
             value={config.target_system ?? ""}
             onChange={(v) => update("target_system", v)}
@@ -368,7 +368,7 @@ function BaselineSection({ config, update }: SectionProps) {
       <CardHeader>
         <CardTitle>Baseline (optional)</CardTitle>
         <CardDescription>
-          The SYSTEM release the customer started from. Enables 3-way merges.
+          The previous version the customer upgraded from. Enables 3-way merges.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">

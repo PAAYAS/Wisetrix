@@ -62,8 +62,8 @@ export default function ProjectsPage() {
           Yantrix · Projects
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Each project tracks one customer's source repo, a target SYSTEM
-          release, and an optional baseline for 3-way merges.
+          Each project tracks one customer's source repo, a target version
+          to upgrade to, and an optional previous version for 3-way merges.
         </p>
       </header>
 
@@ -199,7 +199,7 @@ function EmptyState() {
         <CardTitle>No projects yet</CardTitle>
         <CardDescription>
           Create your first project to scan a customer source against a target
-          SYSTEM release.
+          upgrade version.
         </CardDescription>
       </CardHeader>
       <CardContent>

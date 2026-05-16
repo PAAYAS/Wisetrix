@@ -144,8 +144,8 @@ class BaseAgent:
     @staticmethod
     def _default_system_prompt() -> str:
         return (
-            "You are an expert GTM/CargoWise upgrade engineer. You merge customer "
-            "customizations on top of SYSTEM 26.2 upgrades while preserving "
+            "You are an expert GTM upgrade engineer. You merge customer "
+            "customizations on top of new version upgrades while preserving "
             "functional intent. You are precise, conservative, and never invent "
             "fields or records. You follow the provided merge policy exactly."
         )

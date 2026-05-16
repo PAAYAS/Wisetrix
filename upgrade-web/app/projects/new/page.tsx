@@ -21,7 +21,7 @@ export default function NewProjectPage() {
           Yantrix — New Project
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Pick a source (Git or local) and a target SYSTEM release. You can
+          Pick a source (Git or local) and a target upgrade version. You can
           adjust everything later.
         </p>
       </header>

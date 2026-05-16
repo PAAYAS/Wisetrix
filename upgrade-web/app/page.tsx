@@ -30,12 +30,12 @@ export default function Home() {
             GTM Docker-to-Docker upgrades,
             <br />
             <span className="bg-gradient-to-r from-primary to-fuchsia-400 bg-clip-text text-transparent">
-              with an agent crew on standby.
+              with AI automation ready.
             </span>
           </h1>
           <p className="mt-6 max-w-2xl text-lg leading-relaxed text-muted-foreground">
-            Scan customer customizations, diff them against the target SYSTEM
-            release, run quality-gated 3-way merges through Claude, and ship a
+            Scan customer customizations, diff them against the target upgrade
+            version, run quality-gated 3-way merges with AI, and ship a
             polished upgrade report — all from a single console.
           </p>
 
@@ -67,11 +67,11 @@ export default function Home() {
           {[
             {
               title: "Multi-agent core",
-              body: "Compare · Risk · Merge · Review · Summary — each as a focused Claude agent.",
+              body: "Compare · Risk · Merge · Review · Summary — each handled by a dedicated AI step.",
             },
             {
               title: "3-way merges",
-              body: "Customer × Baseline × SYSTEM in a tool-using Claude session — no Python merge code.",
+              body: "Customer Artifacts × Previous Version × Target Version — intelligent 3-way merge with no manual coding.",
             },
             {
               title: "Ship-ready reports",

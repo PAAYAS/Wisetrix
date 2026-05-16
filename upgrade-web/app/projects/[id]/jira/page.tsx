@@ -14,6 +14,7 @@ import {
   api,
   ApiError,
   type JiraMatchResponse,
+  type JiraMatchSources,
   type JiraStatus,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,7 @@ export default function JiraPage({ params }: { params: { id: string } }) {
 
   const [status, setStatus] = React.useState<JiraStatus | null>(null);
   const [matched, setMatched] = React.useState<Record<string, string>>({});
+  const [sources, setSources] = React.useState<JiraMatchSources>({});
   const [statusError, setStatusError] = React.useState<string | null>(null);
   const [matching, setMatching] = React.useState(false);
   const [filter, setFilter] = React.useState("");
@@ -44,6 +46,7 @@ export default function JiraPage({ params }: { params: { id: string } }) {
       ]);
       setStatus(s);
       setMatched(m.matched ?? {});
+      setSources(m.sources ?? {});
     } catch (e) {
       setStatusError(e instanceof ApiError ? e.message : (e as Error).message);
     }
@@ -58,8 +61,10 @@ export default function JiraPage({ params }: { params: { id: string } }) {
     try {
       const r: JiraMatchResponse = await api.jiraMatch(id);
       setMatched(r.matched ?? {});
+      setSources(r.sources ?? {});
       const total = r.total ?? Object.keys(r.matched).length;
-      toast.success(`Matched ${r.count}/${total}`);
+      const gitNote = r.git_enriched ? ` · ${r.git_enriched} via git` : "";
+      toast.success(`Matched ${r.count}/${total}${gitNote}`);
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
@@ -206,6 +211,7 @@ export default function JiraPage({ params }: { params: { id: string } }) {
                           .map((k) => k.trim())
                           .filter(Boolean)
                       : [];
+                    const artifactSources = sources[artifact] ?? {};
                     return (
                       <tr key={artifact} className="hover:bg-muted/30">
                         <td className="px-4 py-2 font-mono text-xs">
@@ -214,22 +220,32 @@ export default function JiraPage({ params }: { params: { id: string } }) {
                         <td className="px-4 py-2">
                           {isHit ? (
                             <div className="flex flex-wrap gap-1.5">
-                              {ticketKeys.map((key) => (
-                                <a
-                                  key={key}
-                                  className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-xs text-primary hover:underline"
-                                  href={
-                                    status?.base_url
-                                      ? `${status.base_url}/browse/${key}`
-                                      : "#"
-                                  }
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
-                                  {key}
-                                  <ExternalLink className="h-3 w-3" />
-                                </a>
-                              ))}
+                              {ticketKeys.map((key) => {
+                                const src = artifactSources[key];
+                                const isGit = src === "git";
+                                return (
+                                  <a
+                                    key={key}
+                                    className={[
+                                      "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-xs hover:underline",
+                                      isGit
+                                        ? "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"
+                                        : "border-border/60 bg-muted/40 text-muted-foreground",
+                                    ].join(" ")}
+                                    href={
+                                      status?.base_url
+                                        ? `${status.base_url}/browse/${key}`
+                                        : "#"
+                                    }
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    title={isGit ? "Found in git commits" : "Found by keyword match"}
+                                  >
+                                    {key}
+                                    <ExternalLink className="h-3 w-3" />
+                                  </a>
+                                );
+                              })}
                             </div>
                           ) : (
                             <span className="text-xs text-muted-foreground">

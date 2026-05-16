@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Yantrix",
-  description: "Yantrix — GTM / CargoWise Docker-to-Docker upgrade tool",
+  description: "Yantrix — GTM Docker-to-Docker upgrade tool",
 };
 
 export default function RootLayout({

@@ -266,10 +266,15 @@ export interface JiraTestResponse {
   user?: string | null;
 }
 
+/** ticket_key → "git" | "keyword" for every artifact that has a match */
+export type JiraMatchSources = Record<string, Record<string, "git" | "keyword">>;
+
 export interface JiraMatchResponse {
   matched: Record<string, string>;
+  sources?: JiraMatchSources;
   count: number;
   total?: number;
+  git_enriched?: number;
 }
 
 /**
