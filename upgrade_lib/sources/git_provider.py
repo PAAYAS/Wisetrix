@@ -350,11 +350,17 @@ class GitProvider(SourceProvider):
         sample_commit_messages: list[str] = []
         sample_changed_paths: list[str] = []
 
-        # Walk commits on the branch (limit to last 500 for performance)
+        # Use origin/{branch} so we always resolve against the remote tracking
+        # ref — a single-branch shallow clone may not have a local branch ref
+        # if the user changed the branch after the initial clone.
+        remote_ref = f"origin/{branch}"
         try:
-            commits = list(repo.iter_commits(branch, max_count=500))
+            commits = list(repo.iter_commits(remote_ref, max_count=500))
         except Exception:
-            commits = list(repo.iter_commits(max_count=500))
+            try:
+                commits = list(repo.iter_commits(branch, max_count=500))
+            except Exception:
+                commits = list(repo.iter_commits(max_count=500))
 
         commits_scanned = len(commits)
 

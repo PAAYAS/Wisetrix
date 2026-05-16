@@ -2,7 +2,6 @@ import Link from "next/link";
 import { ArrowRight, Activity, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { ApiStatus } from "@/components/api-status";
 
 export default function Home() {
   return (
@@ -14,15 +13,9 @@ export default function Home() {
       </div>
 
       <div className="container max-w-6xl py-20">
-        <header className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-            <Sparkles className="h-4 w-4 text-primary" />
-            <span>Yantrix</span>
-            <span className="rounded-full border border-border bg-card/50 px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-              v0.1 · preview
-            </span>
-          </div>
-          <ApiStatus />
+        <header className="flex items-center gap-3">
+          <Sparkles className="h-6 w-6 text-primary" />
+          <span className="text-3xl font-bold tracking-tight">Yantrix</span>
         </header>
 
         <section className="mt-24 max-w-3xl">
