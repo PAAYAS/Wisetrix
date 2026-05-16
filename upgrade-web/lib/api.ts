@@ -453,7 +453,7 @@ export const api = {
       { method: "POST" },
     ),
   jiraMatch: (id: string, artifact_keys?: string[]) =>
-    request<JiraMatchResponse>(`/projects/${encodeURIComponent(id)}/jira/match`, {
+    requestDirect<JiraMatchResponse>(`/projects/${encodeURIComponent(id)}/jira/match`, {
       method: "POST",
       body: JSON.stringify({ artifact_keys: artifact_keys ?? null }),
     }),

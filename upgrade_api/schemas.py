@@ -57,7 +57,7 @@ class ProjectSummary(BaseModel):
 
 
 class ProjectCreate(BaseModel):
-    id: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    id: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_(). /-]+$")
     config: ProjectConfig
 
 

@@ -42,9 +42,15 @@ The split is intentional:
 
 ## Prerequisites
 
-1. **Claude Code CLI** installed and logged in (`claude --version` should work).
-2. **Python 3.10+**
-3. That's it — no API keys, no Docker.
+1. **Node.js 18+** — required for the Next.js frontend and the Claude Code CLI.
+2. **Claude Code CLI** — install globally, then log in:
+   ```bash
+   npm install -g @anthropic-ai/claude-code
+   claude login
+   ```
+   Verify with `claude --version`. The AI merge/review/summary agents run through Claude Code — no separate `ANTHROPIC_API_KEY` needed once logged in.
+3. **Python 3.10+**
+4. That's it — no Docker.
 
 ---
 

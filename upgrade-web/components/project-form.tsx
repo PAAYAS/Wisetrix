@@ -109,7 +109,7 @@ export function ProjectForm({ mode, initialId, initialConfig }: ProjectFormProps
               id="project-id"
               value={id}
               disabled={mode === "edit"}
-              placeholder="e.g. ALDI"
+              placeholder="e.g. ALDI or ALDI Upgrade 26.2"
               onChange={(e) => setId(e.target.value)}
             />
             {mode === "edit" && (
