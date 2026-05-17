@@ -317,8 +317,11 @@ async def _merge_stream(
 
         if result["ok"]:
             record = result["record"]
-            merges[key] = record
-            save_json(merge_report_path(project_id), merges)
+            # Re-read from disk before saving to avoid overwriting results
+            # from concurrent single-merge streams that ran in parallel.
+            current_merges = load_json(merge_report_path(project_id), {})
+            current_merges[key] = record
+            save_json(merge_report_path(project_id), current_merges)
             succeeded += 1
             merged_keys.append(key)
             verdict = (record.get("quality_result") or {}).get("verdict", "—")

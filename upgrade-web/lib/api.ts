@@ -167,9 +167,17 @@ export type ComparisonMap = Record<string, ComparisonResult>;
 
 export type QualityVerdict = "PASS" | "WARN" | "FAIL";
 
+export interface QualityFinding {
+  severity: "ERROR" | "WARNING" | "INFO";
+  category: string;
+  file: string;
+  line: number | null;
+  message: string;
+}
+
 export interface QualityResult {
   verdict: QualityVerdict;
-  findings?: unknown[];
+  findings?: QualityFinding[];
   blocking?: boolean;
 }
 
@@ -391,7 +399,7 @@ export const api = {
   listMerges: (id: string) =>
     request<MergeListResponse>(`/projects/${encodeURIComponent(id)}/merges`),
   mergeOne: (id: string, key: string) =>
-    request<MergeRecord>(
+    requestDirect<MergeRecord>(
       `/projects/${encodeURIComponent(id)}/merges/${encodeURIComponent(key)}`,
       { method: "POST" },
     ),
@@ -413,7 +421,7 @@ export const api = {
       { method: "POST" },
     ),
   buildReport: (id: string) =>
-    request<{ path: string; bytes: number }>(
+    requestDirect<{ path: string; bytes: number }>(
       `/projects/${encodeURIComponent(id)}/report`,
       { method: "POST" },
     ),
@@ -424,11 +432,11 @@ export const api = {
 
   // Diff + Review
   getDiff: (id: string, key: string) =>
-    request<DiffResponse>(
+    requestDirect<DiffResponse>(
       `/projects/${encodeURIComponent(id)}/diff/${encodeURIComponent(key)}`,
     ),
   runReview: (id: string, key: string) =>
-    request<ReviewResponse>(
+    requestDirect<ReviewResponse>(
       `/projects/${encodeURIComponent(id)}/review/${encodeURIComponent(key)}`,
       { method: "POST" },
     ),
@@ -443,12 +451,12 @@ export const api = {
   jiraIssues: (id: string) =>
     request<JiraIssuesResponse>(`/projects/${encodeURIComponent(id)}/jira/issues`),
   jiraStart: (id: string, metadata: Record<string, unknown> = {}) =>
-    request<{ epic_key: string; summary: string; status: string; url: string }>(
+    requestDirect<{ epic_key: string; summary: string; status: string; url: string }>(
       `/projects/${encodeURIComponent(id)}/jira/start`,
       { method: "POST", body: JSON.stringify({ metadata }) },
     ),
   jiraSync: (id: string) =>
-    request<{ synced: number; issues: JiraIssueRecord[] }>(
+    requestDirect<{ synced: number; issues: JiraIssueRecord[] }>(
       `/projects/${encodeURIComponent(id)}/jira/sync`,
       { method: "POST" },
     ),
@@ -467,12 +475,12 @@ export const api = {
 
   // Provider tests
   testGit: (url: string) =>
-    request<TestConnectionResponse>("/providers/git/test", {
+    requestDirect<TestConnectionResponse>("/providers/git/test", {
       method: "POST",
       body: JSON.stringify({ url }),
     }),
   testArtifactory: (url: string) =>
-    request<TestConnectionResponse>("/providers/artifactory/test", {
+    requestDirect<TestConnectionResponse>("/providers/artifactory/test", {
       method: "POST",
       body: JSON.stringify({ url }),
     }),

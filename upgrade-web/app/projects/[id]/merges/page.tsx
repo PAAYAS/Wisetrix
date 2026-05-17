@@ -21,6 +21,7 @@ import {
   type ComparisonResult,
   type MergeListResponse,
   type MergeRecord,
+  type QualityFinding,
   type QualityVerdict,
   type RiskLevel,
 } from "@/lib/api";
@@ -464,6 +465,7 @@ export default function MergesPage({ params }: { params: { id: string } }) {
                             (rec.quality_result?.verdict ??
                               "—") as QualityVerdict | "—"
                           }
+                          findings={rec.quality_result?.findings}
                         />
                       </td>
                       <td className="px-4 py-2 font-mono text-xs">{key}</td>
@@ -572,7 +574,26 @@ function RiskBadge({ level }: { level: RiskLevel }) {
   return <Badge variant={variant as never}>{level}</Badge>;
 }
 
-function VerdictBadge({ verdict }: { verdict: QualityVerdict | "—" }) {
+const VERDICT_SUMMARY: Record<string, string> = {
+  PASS: "Quality gate passed — no issues found in the merged output.",
+  WARN: "Quality gate warning — merge succeeded but potential issues were found.",
+  FAIL: "Quality gate failed — merge succeeded but errors were found in the output.\nReview findings below before using the merged files.",
+  "—": "No quality gate result recorded.",
+};
+
+const SEVERITY_PREFIX: Record<string, string> = {
+  ERROR: "✖",
+  WARNING: "⚠",
+  INFO: "ℹ",
+};
+
+function VerdictBadge({
+  verdict,
+  findings,
+}: {
+  verdict: QualityVerdict | "—";
+  findings?: QualityFinding[];
+}) {
   const variant =
     verdict === "PASS"
       ? "success"
@@ -581,5 +602,22 @@ function VerdictBadge({ verdict }: { verdict: QualityVerdict | "—" }) {
         : verdict === "FAIL"
           ? "danger"
           : "muted";
-  return <Badge variant={variant as never}>{verdict}</Badge>;
+
+  const lines: string[] = [VERDICT_SUMMARY[verdict] ?? verdict];
+  if (findings && findings.length > 0) {
+    lines.push("");
+    lines.push("Findings:");
+    for (const f of findings) {
+      const prefix = SEVERITY_PREFIX[f.severity] ?? "•";
+      const loc = f.line ? `:${f.line}` : "";
+      lines.push(`${prefix} [${f.file}${loc}] ${f.message}`);
+    }
+  }
+  const tooltip = lines.join("\n");
+
+  return (
+    <span title={tooltip} className="cursor-help">
+      <Badge variant={variant as never}>{verdict}</Badge>
+    </span>
+  );
 }
