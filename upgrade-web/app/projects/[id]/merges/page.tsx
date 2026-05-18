@@ -58,7 +58,7 @@ const PHASE_LABELS: Record<string, string> = {
     "No cached paths — running full resolve (git + artifactory)…",
   resolve_done: "Sources resolved · loading state…",
   reading: "Reading artifact files…",
-  claude_merge_start: "AI is merging…",
+  claude_merge_start: "Yantix is merging…",
   claude_merge_done: "Merge returned · saving files…",
   written: "Files written · running quality gate…",
   quality_start: "Quality gate…",
