@@ -30,6 +30,35 @@ TEXT_EXTS = {
 
 SYSTEM_BUCKET_NAME = "SYSTEM"
 
+# Files Claude writes to ./merged/ for documentation purposes.
+# These are stored separately under output/_analysis/ and excluded
+# from the artifact output that goes to git check-in.
+_ANALYSIS_FILENAMES = {
+    "MERGE_REPORT.md",
+    "MERGE_SUMMARY.txt",
+    "VERIFICATION_CHECKLIST.txt",
+}
+
+
+def _split_analysis_files(
+    merged_files: dict[str, str],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Split merged_files into (artifact_files, analysis_files).
+
+    analysis_files: MERGE_REPORT.md, MERGE_SUMMARY.txt, VERIFICATION_CHECKLIST.txt,
+                    and any *_conflicts.txt files Claude generates.
+    artifact_files: everything else — the actual merged output for git check-in.
+    """
+    artifact: dict[str, str] = {}
+    analysis: dict[str, str] = {}
+    for rel, content in merged_files.items():
+        fname = Path(rel).name
+        if fname in _ANALYSIS_FILENAMES or fname.endswith("_conflicts.txt"):
+            analysis[rel] = content
+        else:
+            artifact[rel] = content
+    return artifact, analysis
+
 
 def _is_text(path: Path) -> bool:
     return path.suffix.lower() in TEXT_EXTS
@@ -135,16 +164,23 @@ def perform_merge(
     merge_res = client.merge_artifact(
         aldi_files, system_files, baseline_files, customer=bucket
     )
-    emit("claude_merge_done", key=key, files=len(merge_res["merged_files"]))
+    artifact_files, analysis_files = _split_analysis_files(merge_res["merged_files"])
+    emit("claude_merge_done", key=key, files=len(artifact_files))
 
     out_dir = out_root / bucket / rel
-    write_artifact_files(out_dir, merge_res["merged_files"])
+    write_artifact_files(out_dir, artifact_files)
+
+    # Store Claude's analysis docs separately — not part of the git check-in artifact.
+    if analysis_files:
+        analysis_dir = out_root / "_analysis" / bucket / rel
+        write_artifact_files(analysis_dir, analysis_files)
+
     emit("written", key=key, out_dir=str(out_dir))
 
     quality_result: dict | None = None
     if quality_gate is not None:
         emit("quality_start", key=key)
-        qr = quality_gate.check(merge_res["merged_files"])
+        qr = quality_gate.check(artifact_files)
         quality_result = qr.to_dict()
         emit("quality_done", key=key, verdict=qr.verdict)
 
@@ -156,7 +192,7 @@ def perform_merge(
     if not skip_diff and not customer_has_diff:
         emit("diff_skipped", key=key, reason="no _diff.json in customer artifact")
     if not skip_diff and customer_has_diff:
-        for fname, content in merge_res["merged_files"].items():
+        for fname, content in artifact_files.items():
             if fname.endswith(".json") and not fname.endswith("_diff.json"):
                 sys_content = system_files.get(fname)
                 if sys_content:
@@ -184,7 +220,7 @@ def perform_merge(
         "bucket": bucket,
         "rel_path": rel,
         "merged_at": datetime.now(timezone.utc).isoformat(),
-        "files": list(merge_res["merged_files"].keys()),
+        "files": list(artifact_files.keys()),
         "explanation": merge_res.get("explanation", ""),
         "diff_generated": diff_info is not None,
         "diff_error": diff_error,

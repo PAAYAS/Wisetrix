@@ -1,28 +1,14 @@
 {
-  "ALDI": {
-    "artifactory_url": "https://sv4.art.e2open.com/ui/native/gtm-release-dev/com/amberroad/solutions/gtm-install/26.2/",
+  "ALDI-26.2": {
+    "artifactory_url": "https://sv4.art.e2open.com/ui/native/gtm-release-dev/com/amberroad/solutions/gtm-install/26.2",
+    "baseline_system": "",
     "baseline_type": "artifactory",
-    "baseline_url": "https://sv4.art.e2open.com/ui/native/gtm-release-dev/com/amberroad/solutions/gtm-install/24.4.11/",
+    "baseline_url": "https://sv4.art.e2open.com/ui/native/gtm-release-dev/com/amberroad/solutions/gtm-install/24.4.11",
     "baseline_version": "24.4.11",
     "git_branch": "24.4.11-7",
     "git_url": "https://git.dev.e2open.com/scm/ser/aldi_app.git",
     "jira_project_url": "https://jira.dev.e2open.com/jira/projects/ALDIBR1",
-    "merge_output_dir": "./output/ALDI",
-    "source_subpath": "client_delivery/src/main/resources/app_root/repos",
-    "source_type": "git",
-    "target_type": "artifactory",
-    "target_version": "26.2"
-  },
-  "EMRSN": {
-    "artifactory_url": "https://sv4.art.e2open.com/ui/native/gtm-release-dev/com/amberroad/solutions/gtm-install/26.2",
-    "baseline_system": "",
-    "baseline_type": "artifactory",
-    "baseline_url": "https://sv4.art.e2open.com/ui/native/gtm-release-dev/com/amberroad/solutions/gtm-install/24.2.10",
-    "baseline_version": "24.2.10",
-    "git_branch": "24.2.10-NEXT_RELEASE",
-    "git_url": "https://git.dev.e2open.com/scm/ser/emerson_app.git",
-    "jira_project_url": "https://jira.dev.e2open.com/jira/projects/EMR",
-    "merge_output_dir": "./output/EMRSN",
+    "merge_output_dir": "./output/ALDI-26.2",
     "source_root": "",
     "source_subpath": "client_delivery/src/main/resources/app_root/repos",
     "source_type": "git",

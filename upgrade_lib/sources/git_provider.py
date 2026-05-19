@@ -199,8 +199,16 @@ class GitProvider(SourceProvider):
                 # fast-forward via reset --hard. This avoids the
                 # `fetch --all --prune` + `pull` combo, which makes two
                 # network round-trips over every ref in the repo.
-                repo.git.fetch("origin", branch, "--no-tags", "--depth=1")
-                # Make sure local branch exists and points at FETCH_HEAD.
+                # Explicit refspec ensures refs/remotes/origin/<branch> is
+                # written even when the clone was made with --single-branch
+                # (which only stores a refspec for the original branch).
+                repo.git.fetch(
+                    "origin",
+                    f"refs/heads/{branch}:refs/remotes/origin/{branch}",
+                    "--no-tags",
+                    "--depth=1",
+                )
+                # Make sure local branch exists and points at the tracking ref.
                 try:
                     repo.git.checkout(branch)
                 except Exception:

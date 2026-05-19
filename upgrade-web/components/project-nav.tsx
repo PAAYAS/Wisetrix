@@ -44,16 +44,16 @@ const TABS: Tab[] = [
     icon: GitCompare,
   },
   {
-    href: (id) => `/projects/${encodeURIComponent(id)}/summary`,
-    label: "Summary",
-    match: "summary",
-    icon: FileText,
-  },
-  {
     href: (id) => `/projects/${encodeURIComponent(id)}/jira`,
     label: "JIRA",
     match: "jira",
     icon: Ticket,
+  },
+  {
+    href: (id) => `/projects/${encodeURIComponent(id)}/summary`,
+    label: "Summary",
+    match: "summary",
+    icon: FileText,
   },
 ];
 

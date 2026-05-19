@@ -6,6 +6,7 @@ POST /projects/{id}/review/{key:path}      -> Claude structured review
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import anyio
@@ -20,6 +21,14 @@ from upgrade_lib.claude_client import UpgradeClient
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["diff"])
 
+_VER_RE = re.compile(r"\b(\d+\.\d+(?:\.\d+)*)\b")
+
+
+def _extract_version_label(path: str) -> str:
+    """Pull the first version-like token (e.g. 26.2) out of a filesystem path."""
+    m = _VER_RE.search(path)
+    return m.group(1) if m else "SYSTEM"
+
 
 def _project_or_404(project_id: str) -> dict:
     projects = load_projects()
@@ -28,7 +37,7 @@ def _project_or_404(project_id: str) -> dict:
     return projects[project_id]
 
 
-def _roots_for(project_id: str, project: dict) -> tuple[Path, Path, Path, str]:
+def _roots_for(project_id: str, project: dict) -> tuple[Path, Path, Path, str, dict]:
     try:
         resolved = resolve_project_paths(project)
     except Exception as e:
@@ -39,7 +48,7 @@ def _roots_for(project_id: str, project: dict) -> tuple[Path, Path, Path, str]:
         resolved.get("merge_output_dir") or project.get("merge_output_dir", "")
     )
     default_bucket = primary_customer_bucket(source_root, project_id)
-    return source_root, target_root, out_root, default_bucket
+    return source_root, target_root, out_root, default_bucket, resolved
 
 
 def _entry_for(project_id: str, key: str) -> dict:
@@ -56,7 +65,7 @@ def _entry_for(project_id: str, key: str) -> dict:
 def get_diff(project_id: str, key: str) -> dict:
     project = _project_or_404(project_id)
     entry = _entry_for(project_id, key)
-    source_root, target_root, out_root, default_bucket = _roots_for(project_id, project)
+    source_root, target_root, out_root, default_bucket, resolved = _roots_for(project_id, project)
     rel = entry.get("rel_path", key)
     bucket = entry.get("bucket") or default_bucket
 
@@ -65,6 +74,7 @@ def get_diff(project_id: str, key: str) -> dict:
     merged = read_artifact_files(out_root / bucket / rel)
 
     files = sorted(set(aldi) | set(system) | set(merged))
+    target_label = _extract_version_label(str(resolved.get("target_system", "")))
     return {
         "key": key,
         "bucket": bucket,
@@ -74,6 +84,7 @@ def get_diff(project_id: str, key: str) -> dict:
         "system": system,
         "merged": merged,
         "has_merge": bool(merged),
+        "target_label": target_label,
     }
 
 
@@ -85,7 +96,7 @@ async def review(project_id: str, key: str) -> dict:
         raise HTTPException(404, f"Artifact '{key}' has not been merged yet")
     entry = merges[key]
 
-    source_root, target_root, out_root, default_bucket = _roots_for(project_id, project)
+    source_root, target_root, out_root, default_bucket, _resolved = _roots_for(project_id, project)
     rel = entry.get("rel_path", key)
     bucket = entry.get("bucket") or default_bucket
 

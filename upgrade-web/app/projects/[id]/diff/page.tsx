@@ -263,13 +263,21 @@ export default function DiffPage({ params }: { params: { id: string } }) {
                                 : "rounded px-2 py-1 text-muted-foreground hover:text-foreground"
                             }
                           >
-                            vs {s === "source" ? "customer" : "SYSTEM"}
+                            vs {s === "source" ? diff.bucket : diff.target_label}
                           </button>
                         ))}
                       </div>
                     </div>
                   </CardHeader>
                   <CardContent className="p-0">
+                    <div className="flex border-t border-border/40 bg-muted/30 px-4 py-1.5 text-xs font-medium text-muted-foreground">
+                      <span className="flex-1">
+                        {side === "source" ? diff.bucket : diff.target_label}
+                      </span>
+                      <span className="flex-1 text-right text-primary/80">
+                        Merged output
+                      </span>
+                    </div>
                     <div className="h-[60vh] w-full overflow-hidden rounded-b-lg border-t border-border/40">
                       <DiffEditor
                         height="100%"

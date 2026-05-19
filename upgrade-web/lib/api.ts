@@ -227,6 +227,7 @@ export interface DiffResponse {
   system: Record<string, string>;
   merged: Record<string, string>;
   has_merge: boolean;
+  target_label: string;
 }
 
 export interface ReviewFinding {
