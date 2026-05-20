@@ -25,6 +25,11 @@ from typing import Any
 
 _log = logging.getLogger(__name__)
 
+# Imported lazily to avoid circular imports — router lives one level up
+def _get_router():
+    from upgrade_lib.claude_router import default_router
+    return default_router
+
 
 DEFAULT_MODEL = "claude-sonnet-4-5"
 
@@ -34,7 +39,14 @@ def _find_claude_exe() -> str:
 
     On Windows, shutil.which('claude') returns a shell script or .CMD wrapper
     which subprocess may struggle with. This resolves the real binary.
+
+    Result is cached at module level — no filesystem scan on every call.
     """
+    return _CLAUDE_EXE_CACHE
+
+
+def _resolve_claude_exe() -> str:
+    """Resolve claude exe path once at import time."""
     if sys.platform == "win32":
         exe = Path.home() / "AppData/Roaming/npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
         if exe.exists():
@@ -45,6 +57,9 @@ def _find_claude_exe() -> str:
     raise FileNotFoundError(
         "Claude Code CLI not found. Install with: npm install -g @anthropic-ai/claude-code"
     )
+
+
+_CLAUDE_EXE_CACHE: str = _resolve_claude_exe()
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
@@ -105,7 +120,13 @@ def extract_json(text: str) -> dict[str, Any]:
 # BaseAgent
 # --------------------------------------------------------------------------- #
 
-class BaseAgent:
+# LearningMixin imported lazily (same pattern as router) to avoid circular imports
+def _get_learning_mixin():
+    from upgrade_lib.mcp.hooks import LearningMixin
+    return LearningMixin
+
+
+class BaseAgent(_get_learning_mixin()):
     """
     Base class for all upgrade agents.
 
@@ -114,6 +135,11 @@ class BaseAgent:
       - system_prompt_file: str   e.g. "merge_system.md"
     and implement their public methods.
 
+    Inherits LearningMixin which hooks into _call() to:
+      - inject lessons from the MCP server before each Claude call
+      - store new lessons after failures or retries
+
+
     Uses direct subprocess calls to Claude CLI instead of the async SDK,
     which has event-loop conflicts inside Streamlit on Windows.
     """
@@ -121,25 +147,40 @@ class BaseAgent:
     agent_name: str = "base"
     system_prompt_file: str | None = None
 
+    _ROUTER_DEFAULT = object()  # sentinel: "caller did not pass router"
+
     def __init__(
         self,
         model: str = DEFAULT_MODEL,
         max_turns: int = 1,
+        router=_ROUTER_DEFAULT,
     ) -> None:
         self.model = model
         self.max_turns = max_turns
         self.usage = UsageStats()
+        # router not passed  -> use the module-level default router (auto select)
+        # router=None        -> routing disabled; always use self.model
+        # router=ClaudeRouter -> use that specific router
+        if router is self._ROUTER_DEFAULT:
+            self._router = _get_router()
+        else:
+            self._router = router
+        # Cache system prompt once per instance — avoids disk read on every call
+        self._system_prompt_cache: str | None = None
 
     # ---- system prompt -------------------------------------------------------
 
     def _load_system_prompt(self) -> str:
-        """Load per-agent system prompt from prompts/ directory."""
+        """Load per-agent system prompt from prompts/ directory (cached per instance)."""
+        if self._system_prompt_cache is not None:
+            return self._system_prompt_cache
         if not self.system_prompt_file:
-            return self._default_system_prompt()
-        path = _PROMPTS_DIR / self.system_prompt_file
-        if path.exists():
-            return path.read_text(encoding="utf-8")
-        return self._default_system_prompt()
+            prompt = self._default_system_prompt()
+        else:
+            path = _PROMPTS_DIR / self.system_prompt_file
+            prompt = path.read_text(encoding="utf-8") if path.exists() else self._default_system_prompt()
+        self._system_prompt_cache = prompt
+        return prompt
 
     @staticmethod
     def _default_system_prompt() -> str:
@@ -165,6 +206,7 @@ class BaseAgent:
         max_turns_override: int | None = None,
         cwd: str | None = None,
         timeout_override: int | None = None,
+        estimated_file_count: int = 0,
     ) -> str:
         """Call Claude CLI via subprocess.run — reliable in any context.
 
@@ -173,11 +215,12 @@ class BaseAgent:
         inside Streamlit.
 
         Optional kwargs enable tool-using agentic calls:
-          allowed_tools: e.g. ["Read", "Write", "Glob"]
-          add_dirs:      extra directories Claude is allowed to access
-          max_turns_override: override self.max_turns for this call
-          cwd:           working directory for the subprocess
-          timeout_override: override _CLI_TIMEOUT for this call
+          allowed_tools:          e.g. ["Read", "Write", "Glob"]
+          add_dirs:               extra directories Claude is allowed to access
+          max_turns_override:     override self.max_turns for this call
+          cwd:                    working directory for the subprocess
+          timeout_override:       override _CLI_TIMEOUT for this call
+          estimated_file_count:   hint to the router (e.g. number of files staged)
         """
         cli = _find_claude_exe()
         system_prompt = system or self._load_system_prompt()
@@ -185,10 +228,33 @@ class BaseAgent:
         max_turns = max_turns_override if max_turns_override is not None else self.max_turns
         timeout = timeout_override if timeout_override is not None else _CLI_TIMEOUT
 
+        # --- Route: ask the router which model to use for this call ----------
+        if self._router:
+            from upgrade_lib.claude_router import RouteRequest
+            decision = self._router.route(RouteRequest(
+                agent_name=self.agent_name,
+                prompt_len=len(prompt),
+                max_turns=max_turns,
+                has_tools=bool(allowed_tools),
+                estimated_file_count=estimated_file_count,
+            ))
+            model = decision.model
+        else:
+            model = self.model
+        # ---------------------------------------------------------------------
+
+        # --- MCP Lesson Lookup: inject known fixes into the system prompt -----
+        system_prompt = self._lookup_lessons(
+            system_prompt, prompt, cwd,
+            has_tools=bool(allowed_tools),
+            estimated_file_count=estimated_file_count,
+        )
+        # ---------------------------------------------------------------------
+
         last_err: Exception | None = None
         for attempt in range(1, self._MAX_RETRIES + 1):
             try:
-                _log.info("[%s] Calling Claude CLI (attempt %d)...", self.agent_name, attempt)
+                _log.info("[%s] Calling Claude CLI model=%s (attempt %d)...", self.agent_name, model, attempt)
                 start = time.time()
 
                 # Write system prompt to a temp file to avoid command-line
@@ -203,7 +269,7 @@ class BaseAgent:
                     cmd = [
                         cli,
                         "-p",                # print mode; reads prompt from stdin
-                        "--model", self.model,
+                        "--model", model,
                         "--output-format", "text",
                         "--system-prompt-file", sp_path,
                         "--max-turns", str(max_turns),
@@ -241,6 +307,9 @@ class BaseAgent:
                     )
 
                 self.usage.calls += 1
+                # MCP: if we succeeded on a retry, that pattern is worth remembering
+                if attempt > 1:
+                    self._store_retry_success(attempt, prompt, cwd, bool(allowed_tools), estimated_file_count)
                 return result.stdout
 
             except subprocess.TimeoutExpired:
@@ -268,4 +337,7 @@ class BaseAgent:
             if attempt < self._MAX_RETRIES:
                 time.sleep(self._RETRY_BACKOFF)
 
+        # MCP: all retries exhausted — store the failure pattern
+        if last_err is not None:
+            self._store_failure(last_err, self._MAX_RETRIES, prompt, cwd, bool(allowed_tools), estimated_file_count)
         raise last_err  # type: ignore[misc]

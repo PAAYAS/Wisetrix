@@ -131,7 +131,7 @@ async def merge_one(project_id: str, key: str) -> dict:
             client,
             qg,
             default_bucket,
-            False,
+            False,  # skip_diff=False: regenerate _diff.json so downloads are complete
         )
     )
 
@@ -298,14 +298,6 @@ async def _merge_stream(
                         _cb,
                     )
                 )
-                # Save inside the task — survives SSE client disconnect.
-                # asyncio.create_task keeps this running even if the generator
-                # is cancelled (user navigates away), so the result is always
-                # persisted to disk regardless of whether the client is still
-                # connected.
-                current_merges = load_json(merge_report_path(project_id), {})
-                current_merges[k] = rec
-                save_json(merge_report_path(project_id), current_merges)
                 return {"ok": True, "record": rec}
             except Exception as ex:  # noqa: BLE001
                 return {"ok": False, "error": str(ex)}
@@ -325,6 +317,11 @@ async def _merge_stream(
 
         if result["ok"]:
             record = result["record"]
+            # Re-read from disk before saving to avoid overwriting results
+            # from concurrent single-merge streams that ran in parallel.
+            current_merges = load_json(merge_report_path(project_id), {})
+            current_merges[key] = record
+            save_json(merge_report_path(project_id), current_merges)
             succeeded += 1
             merged_keys.append(key)
             verdict = (record.get("quality_result") or {}).get("verdict", "—")

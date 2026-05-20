@@ -39,6 +39,7 @@ from upgrade_api.routers import (  # noqa: E402
     scan,
     summary,
 )
+from upgrade_lib.mcp.server import get_mcp_router  # noqa: E402
 
 logger = logging.getLogger("upgrade_api.access")
 
@@ -95,7 +96,7 @@ async def log_requests(request: Request, call_next):
 
 # ---------------------------------------------------------------------------
 # Frontend log relay — the Next.js UI posts client-side errors here so they
-# end up in the same yantrix.log file as backend errors.
+# end up in the same wisetrix.log file as backend errors.
 # ---------------------------------------------------------------------------
 _fe_logger = logging.getLogger("upgrade_api.frontend")
 
@@ -132,3 +133,4 @@ app.include_router(merges.router)
 app.include_router(summary.router)
 app.include_router(diff.router)
 app.include_router(jira.router)
+app.include_router(get_mcp_router(), prefix="/mcp", tags=["learning"])

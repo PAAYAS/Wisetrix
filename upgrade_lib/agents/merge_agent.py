@@ -83,6 +83,8 @@ Do NOT include file contents in the JSON — they are already on disk under ./me
 - For JSON: deep-merge by primary key, resequence ROW_SEQ / SET_VALIDATION_ID where required.
 - For Java/JS/JSP: dedupe class-level methods, never dedupe inside anonymous inner
   classes, keep imports consistent with usage.
+- Do NOT write MERGE_REPORT.md, MERGE_SUMMARY.txt, VERIFICATION_CHECKLIST.txt or any
+  analysis/documentation files. Write ONLY the actual merged artifact files to ./merged/.
 """
 
 
@@ -123,11 +125,37 @@ def _read_tree(root: Path) -> dict[str, str]:
     return result
 
 
+def _turns_for_files(total_files: int, total_bytes: int = 0) -> int:
+    """Scale max_turns to actual file count and total content size.
+
+    Turn budget per file (worst case with chunked reads):
+      3 Glob turns (customer + system + baseline discovery)  — paid once
+      per file: 3 reads (one per source) + up to 3 chunk reads for large
+                files + 1 write = up to 7 turns/file
+      1 final JSON response turn
+
+    We use 10 turns/file as the per-file budget to give comfortable headroom,
+    then add extra turns if total content is large (chunked reads needed).
+
+    total_bytes = 0 means unknown — fall back to file-count-only estimate.
+    """
+    # 3 discovery turns + 10 per file + 1 final response
+    base = 3 + (total_files * 10) + 1
+
+    # Extra turns for large content (each 50KB chunk costs ~1 extra turn per file)
+    if total_bytes > 0:
+        extra_chunks = max(0, (total_bytes // 50_000) - total_files)
+        base += extra_chunks
+
+    # Always give at least 30 turns; never exceed 200
+    return max(30, min(base, 200))
+
+
 class MergeAgent(BaseAgent):
     agent_name = "merge"
     system_prompt_file = "merge_system.md"
 
-    # Tool-using merges need many turns (one per Read/Write call).
+    # Hard ceiling — only reached for very large artifact sets.
     _MERGE_MAX_TURNS = 200
     # Tool-using merges can take longer than single-shot prompts.
     _MERGE_TIMEOUT_SECONDS = 1800  # 30 minutes per artifact
@@ -182,18 +210,25 @@ class MergeAgent(BaseAgent):
                 merge_policy=policy,
             )
 
+            total_files = n_cust + n_sys + n_base
+            total_bytes = sum(len(c) for c in (customer_files or {}).values()) + \
+                          sum(len(c) for c in (system_files or {}).values()) + \
+                          sum(len(c) for c in (baseline_files or {}).values())
+            dynamic_turns = _turns_for_files(total_files, total_bytes)
             _log.info(
-                "[merge] Invoking Claude with Read/Write tools (workdir=%s)",
-                workdir,
+                "[merge] Invoking Claude with Read/Write tools "
+                "(workdir=%s, total_files=%d, total_bytes=%d, max_turns=%d)",
+                workdir, total_files, total_bytes, dynamic_turns,
             )
 
             raw = self._call(
                 prompt,
                 allowed_tools=["Read", "Write", "Glob", "LS"],
                 add_dirs=[str(workdir)],
-                max_turns_override=self._MERGE_MAX_TURNS,
+                max_turns_override=dynamic_turns,
                 cwd=str(workdir),
                 timeout_override=self._MERGE_TIMEOUT_SECONDS,
+                estimated_file_count=total_files,
             )
 
             # Read merged files back from disk
@@ -210,6 +245,8 @@ class MergeAgent(BaseAgent):
                 explanation = raw.strip()[-2000:] if raw else ""
 
             if not merged_files:
+                # MCP: record this silent failure pattern so future runs are warned
+                self._store_empty_merge(prompt, str(workdir), total_files)
                 raise RuntimeError(
                     "Merge produced no output files. Claude may have failed to "
                     "write to ./merged/. Last response: " + (raw[:1000] if raw else "(empty)")

@@ -23,6 +23,7 @@ from upgrade_lib.agents.merge_agent import MergeAgent
 from upgrade_lib.agents.diff_agent import DiffAgent
 from upgrade_lib.agents.review_agent import ReviewAgent
 from upgrade_lib.agents.summary_agent import SummaryAgent
+from upgrade_lib.claude_router import ClaudeRouter, default_router
 
 
 class UpgradeClient:
@@ -32,19 +33,28 @@ class UpgradeClient:
     Authentication: relies on Claude Code's existing OAuth login
     (~/.claude). If that is absent, the SDK will fall back to
     ANTHROPIC_API_KEY — but we don't require it.
+
+    The ClaudeRouter sits between each agent and the Claude CLI, selecting
+    the cheapest model that can handle the request. Pass `router=False` to
+    disable routing and use `model` for every call (old behaviour).
     """
 
     def __init__(
         self,
         model: str = DEFAULT_MODEL,
         max_turns: int = 1,
+        router: ClaudeRouter | None | bool = None,
     ) -> None:
         self.model = model
         self.max_turns = max_turns
-        self._merge = MergeAgent(model=model, max_turns=max_turns)
-        self._diff = DiffAgent(model=model, max_turns=max_turns)
-        self._review = ReviewAgent(model=model, max_turns=max_turns)
-        self._summary = SummaryAgent(model=model, max_turns=max_turns)
+        # router=None  → use default_router (auto model selection)
+        # router=False → disable routing, all agents use `model`
+        # router=ClaudeRouter(...) → use custom router
+        _router = default_router if router is None else (None if router is False else router)
+        self._merge = MergeAgent(model=model, max_turns=max_turns, router=_router)
+        self._diff = DiffAgent(model=model, max_turns=max_turns, router=_router)
+        self._review = ReviewAgent(model=model, max_turns=max_turns, router=_router)
+        self._summary = SummaryAgent(model=model, max_turns=max_turns, router=_router)
 
     @property
     def usage(self) -> UsageStats:
