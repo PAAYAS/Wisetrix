@@ -1,0 +1,31 @@
+# Yantrix / Wisetrix — configuration template
+#
+# Copy this file to config.yaml and fill in your real values.
+# config.yaml is gitignored and must NEVER be committed (contains credentials).
+#
+#   cp config.example.yml config.yaml
+
+# ---------------------------------------------------------------------------
+# Artifactory — artifact download credentials
+# ---------------------------------------------------------------------------
+artifactory:
+  # Base URL of your Artifactory instance (no trailing slash)
+  base_url: https://your-artifactory.example.com/artifactory
+
+  # Basic-auth credentials for downloading GTM release JARs
+  username: your-artifactory-username
+  password: your-artifactory-password-or-api-token
+
+# ---------------------------------------------------------------------------
+# JIRA — ticket tracking integration
+# ---------------------------------------------------------------------------
+jira:
+  # Set to true to enable JIRA integration in the UI
+  enabled: false
+
+  # Base URL of your JIRA instance (no trailing slash)
+  base_url: https://your-jira.example.com
+
+  # JIRA credentials (use an API token, not your login password)
+  username: your-jira-email@example.com
+  password: your-jira-api-token
