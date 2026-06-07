@@ -40,6 +40,22 @@ projects.json
 # --- Temp / test scripts ---
 test_*.py
 
+# --- Claude Code local data (worktrees, sessions, cache) ---
+# .claude/skills/ is intentionally tracked (shared skill definitions)
+.claude/worktrees/
+.claude/projects/
+.claude/sessions/
+.claude/cache/
+.claude/shell-snapshots/
+.claude/backups/
+.claude/settings.local.json
+.claude/mcp-needs-auth-cache.json
+.claude/policy-limits.json
+.claude/remote-settings.json
+.claude/history.jsonl
+.claude/.credentials.json
+.claude/.last-cleanup
+
 # --- IDE / editor ---
 .vscode/
 .idea/
