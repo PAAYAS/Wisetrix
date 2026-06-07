@@ -30,6 +30,16 @@ run_state/
 output/
 upgrade-frontend/output/
 
+# --- Logs ---
+logs/
+*.log
+
+# --- Project config (contains real URLs/credentials — use projects.example.json) ---
+projects.json
+
+# --- Temp / test scripts ---
+test_*.py
+
 # --- IDE / editor ---
 .vscode/
 .idea/
