@@ -185,6 +185,7 @@ export interface MergeRecord {
   bucket: string;
   rel_path: string;
   merged_at: string;
+  merge_duration_seconds: number | null;
   files: string[];
   explanation: string;
   diff_generated: boolean;

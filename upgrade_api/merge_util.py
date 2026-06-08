@@ -7,6 +7,7 @@ import io
 import json
 import logging
 import re
+import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -188,6 +189,7 @@ def perform_merge(
     # look up the real SYSTEM counterpart (e.g. datasets/REPORT/MY_REPORT).
     system_rel = entry.get("system_rel_path") or rel
 
+    merge_start = time.monotonic()
     emit("reading", key=key)
     customer_files = read_artifact_files(source_root / bucket / rel)
     system_files = read_artifact_files(target_root / system_rel)
@@ -286,6 +288,7 @@ def perform_merge(
                         emit("diff_failed", key=key, file=fname, error=str(e))
                 break
 
+    merge_duration_seconds = round(time.monotonic() - merge_start, 1)
     explanation = merge_res.get("explanation", "")
 
     # ── Rule 6: business_process_policies DB warning ──────────────────────────
@@ -306,6 +309,7 @@ def perform_merge(
         "bucket": bucket,
         "rel_path": rel,
         "merged_at": datetime.now(timezone.utc).isoformat(),
+        "merge_duration_seconds": merge_duration_seconds,
         "files": list(artifact_files.keys()),
         "explanation": explanation,
         "base_redirect": base_redirect,

@@ -44,6 +44,8 @@ interface BulkState {
   currentStartedAt: number;
   failures: { key: string; error: string }[];
   succeeded: number;
+  batchStartedAt: number;    // epoch ms when Merge All was clicked
+  batchDurationMs: number;   // filled in when batch completes
 }
 
 interface SingleState {
@@ -93,6 +95,8 @@ export default function MergesPage({ params }: { params: { id: string } }) {
     currentStartedAt: 0,
     failures: [],
     succeeded: 0,
+    batchStartedAt: 0,
+    batchDurationMs: 0,
   });
 
   // Tick once per second while any merge is running so elapsed timers
@@ -171,6 +175,7 @@ export default function MergesPage({ params }: { params: { id: string } }) {
 
   const mergeAll = () => {
     if (bulk.running) return;
+    const batchStart = Date.now();
     setBulk({
       running: true,
       index: 0,
@@ -180,6 +185,8 @@ export default function MergesPage({ params }: { params: { id: string } }) {
       currentStartedAt: 0,
       failures: [],
       succeeded: 0,
+      batchStartedAt: batchStart,
+      batchDurationMs: 0,
     });
     const es = new EventSource(api.mergeAllStreamUrl(id));
     es.addEventListener("scan", (e) => {
@@ -229,7 +236,11 @@ export default function MergesPage({ params }: { params: { id: string } }) {
     es.addEventListener("done", (e) => {
       const d = JSON.parse((e as MessageEvent).data);
       es.close();
-      setBulk((b) => ({ ...b, running: false }));
+      setBulk((b) => ({
+        ...b,
+        running: false,
+        batchDurationMs: b.batchStartedAt ? Date.now() - b.batchStartedAt : 0,
+      }));
       const failedN = d.failed?.length ?? 0;
       if (failedN > 0) {
         toast.warning(`Merged ${d.succeeded}/${d.total} — ${failedN} failed`);
@@ -355,6 +366,17 @@ export default function MergesPage({ params }: { params: { id: string } }) {
               {bulk.current
                 ? `${bulk.index}/${bulk.total} · ${bulk.current}`
                 : `${bulk.succeeded} merged · ${bulk.failures.length} failed`}
+              {/* Overall elapsed / total time */}
+              {bulk.running && bulk.batchStartedAt > 0 && (
+                <span className="ml-2 font-mono text-xs text-muted-foreground">
+                  · total {fmtElapsed(Date.now() - bulk.batchStartedAt)}
+                </span>
+              )}
+              {!bulk.running && bulk.batchDurationMs > 0 && (
+                <span className="ml-2 font-mono text-xs text-muted-foreground">
+                  · completed in {fmtElapsed(bulk.batchDurationMs)}
+                </span>
+              )}
             </CardDescription>
             {bulk.running && bulk.current && (
               <div className="mt-1 inline-flex items-center gap-1.5 text-xs">
@@ -455,6 +477,7 @@ export default function MergesPage({ params }: { params: { id: string } }) {
                     <th className="px-4 py-2 font-medium">Verdict</th>
                     <th className="px-4 py-2 font-medium">Artifact</th>
                     <th className="px-4 py-2 font-medium">Files</th>
+                    <th className="px-4 py-2 font-medium">Duration</th>
                     <th className="px-4 py-2 font-medium">Merged at</th>
                     <th className="px-4 py-2 font-medium text-right">Download</th>
                   </tr>
@@ -474,6 +497,11 @@ export default function MergesPage({ params }: { params: { id: string } }) {
                       <td className="px-4 py-2 font-mono text-xs">{key}</td>
                       <td className="px-4 py-2 text-muted-foreground">
                         {rec.files.length}
+                      </td>
+                      <td className="px-4 py-2 font-mono text-xs text-muted-foreground">
+                        {rec.merge_duration_seconds != null
+                          ? fmtElapsed(rec.merge_duration_seconds * 1000)
+                          : "—"}
                       </td>
                       <td className="px-4 py-2 text-xs text-muted-foreground">
                         {rec.merged_at}
