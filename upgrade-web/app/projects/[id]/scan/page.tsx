@@ -89,6 +89,13 @@ export default function ScanPage({ params }: { params: { id: string } }) {
   const [metaPhase, setMetaPhase] = React.useState("");
   /** Human-readable note emitted alongside the phase */
   const [metaNote, setMetaNote] = React.useState("");
+  /** Download progress from Artifactory — shown during JAR download */
+  const [downloadProgress, setDownloadProgress] = React.useState<{
+    msg: string;
+    pct: number | null;
+    downloaded_mb: number | null;
+    total_mb: number | null;
+  } | null>(null);
 
   const [comparison, setComparison] = React.useState<ComparisonMap>({});
   const [projectCfg, setProjectCfg] = React.useState<ProjectConfig | null>(null);
@@ -133,6 +140,7 @@ export default function ScanPage({ params }: { params: { id: string } }) {
     setMetaLoading(true);
     setMetaPhase("");
     setMetaNote("");
+    setDownloadProgress(null);
 
     const es = new EventSource(api.artifactsStreamUrl(id));
     metaEsRef.current = es;
@@ -146,11 +154,37 @@ export default function ScanPage({ params }: { params: { id: string } }) {
       setMetaNote(d.note ?? "");
     });
 
+    es.addEventListener("download_progress", (ev) => {
+      const d = JSON.parse((ev as MessageEvent).data) as {
+        phase: string;
+        msg?: string;
+        pct?: number;
+        downloaded_mb?: number;
+        total_mb?: number;
+      };
+      // Only show the progress bar for active download/extract phases
+      if (
+        d.phase === "download_start" ||
+        d.phase === "download_progress" ||
+        d.phase === "download_done" ||
+        d.phase === "extract_start" ||
+        d.phase === "extract_done"
+      ) {
+        setDownloadProgress({
+          msg: d.msg ?? d.phase,
+          pct: d.pct ?? null,
+          downloaded_mb: d.downloaded_mb ?? null,
+          total_mb: d.total_mb ?? null,
+        });
+      }
+    });
+
     es.addEventListener("done", (ev) => {
       const d = JSON.parse((ev as MessageEvent).data) as ArtifactListResponse;
       setMeta(d);
       setMetaLoading(false);
       setMetaPhase("");
+      setDownloadProgress(null);
       es.close();
       metaEsRef.current = null;
     });
@@ -350,6 +384,34 @@ export default function ScanPage({ params }: { params: { id: string } }) {
               <CardDescription>{metaNote}</CardDescription>
             )}
           </CardHeader>
+
+          {/* Artifactory download progress bar */}
+          {downloadProgress && (
+            <CardContent className="pt-0 pb-4">
+              <p className="text-xs text-muted-foreground mb-2">
+                {downloadProgress.msg}
+              </p>
+              {downloadProgress.pct !== null && (
+                <div className="w-full bg-muted rounded-full h-2">
+                  <div
+                    className="bg-primary h-2 rounded-full transition-all duration-300"
+                    style={{ width: `${downloadProgress.pct}%` }}
+                  />
+                </div>
+              )}
+              {downloadProgress.downloaded_mb !== null && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  {downloadProgress.downloaded_mb} MB
+                  {downloadProgress.total_mb
+                    ? ` / ${downloadProgress.total_mb} MB`
+                    : " downloaded"}
+                  {downloadProgress.pct !== null
+                    ? ` (${downloadProgress.pct}%)`
+                    : ""}
+                </p>
+              )}
+            </CardContent>
+          )}
         </Card>
       )}
 

@@ -230,11 +230,42 @@ async def _artifacts_stream(project_id: str) -> AsyncIterator[dict]:
                     "(first time — usually 1–3 min)…",
                 )
 
-        # ── Run resolve in a worker thread (I/O bound) ───────────────────────
-        try:
-            resolved = await anyio.to_thread.run_sync(
-                lambda: resolve_project_paths(project, skip_pull=True)
+        # ── Run resolve in a worker thread, streaming progress back ──────────
+        # The download can take 1-3 min. We use a queue so the Artifactory
+        # provider can push download/extract progress events back to this SSE
+        # generator while the worker thread is running.
+        loop = asyncio.get_running_loop()
+        progress_queue: asyncio.Queue = asyncio.Queue()
+        _RESOLVE_DONE = object()
+
+        def _progress_cb(phase: str, data: dict) -> None:
+            loop.call_soon_threadsafe(
+                progress_queue.put_nowait, {"phase": phase, **data}
             )
+
+        async def _run_resolve() -> dict:
+            try:
+                return await anyio.to_thread.run_sync(
+                    lambda: resolve_project_paths(
+                        project, skip_pull=True, progress_cb=_progress_cb
+                    )
+                )
+            finally:
+                loop.call_soon_threadsafe(
+                    progress_queue.put_nowait, _RESOLVE_DONE
+                )
+
+        resolve_task = asyncio.create_task(_run_resolve())
+
+        # Drain progress events until the resolve task signals done
+        while True:
+            item = await progress_queue.get()
+            if item is _RESOLVE_DONE:
+                break
+            yield {"event": "download_progress", "data": json.dumps(item)}
+
+        try:
+            resolved = await resolve_task
         except Exception as e:
             logger.error(
                 "artifacts_stream: resolve failed for %s: %s",

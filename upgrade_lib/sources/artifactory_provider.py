@@ -15,8 +15,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import time
 import zipfile
 from pathlib import Path
+from typing import Callable
 
 try:
     import requests
@@ -165,7 +167,11 @@ class ArtifactoryProvider(SourceProvider):
 
     provider_type = "artifactory"
 
-    def resolve(self, config: dict) -> ResolvedSource:
+    def resolve(
+        self,
+        config: dict,
+        progress_cb: Callable[[str, dict], None] | None = None,
+    ) -> ResolvedSource:
         if requests is None:
             raise ImportError(
                 "requests is required for Artifactory integration. "
@@ -185,14 +191,18 @@ class ArtifactoryProvider(SourceProvider):
         # Resolve target
         target_url = config.get("artifactory_url", "")
         target_version = config.get("target_version", _version_from_url(target_url))
-        target_path = self._download_and_extract(target_url, target_version, auth)
+        target_path = self._download_and_extract(
+            target_url, target_version, auth, progress_cb=progress_cb
+        )
 
         # Resolve baseline (optional)
         baseline_path = None
         baseline_url = config.get("baseline_url") or config.get("baseline_artifactory_url", "")
         if baseline_url:
             baseline_version = config.get("baseline_version", _version_from_url(baseline_url))
-            baseline_path = self._download_and_extract(baseline_url, baseline_version, auth)
+            baseline_path = self._download_and_extract(
+                baseline_url, baseline_version, auth, progress_cb=progress_cb
+            )
 
         return ResolvedSource(
             source_root=Path(config.get("source_root", "")),  # resolved separately
@@ -216,14 +226,30 @@ class ArtifactoryProvider(SourceProvider):
         return errors
 
     def _download_and_extract(
-        self, url: str, version: str, auth: tuple | None
+        self,
+        url: str,
+        version: str,
+        auth: tuple | None,
+        progress_cb: Callable[[str, dict], None] | None = None,
     ) -> Path:
-        """Download JAR and extract to cache. Returns SYSTEM path."""
+        """Download JAR and extract to cache. Returns SYSTEM path.
+
+        progress_cb(phase, data) is called at key points so callers can
+        surface progress to a UI or log stream without polling.
+        """
+        def _emit(phase: str, **data: object) -> None:
+            if progress_cb:
+                try:
+                    progress_cb(phase, {"version": version, **data})
+                except Exception:
+                    pass  # never let a progress callback crash the download
+
         cache_dir = _CACHE_ROOT / version
         system_path = self._find_system_path(cache_dir)
 
         if system_path:
             logger.info("Using cached extraction for version %s", version)
+            _emit("cached", msg=f"v{version} already extracted locally")
             return system_path
 
         # Download
@@ -235,9 +261,45 @@ class ArtifactoryProvider(SourceProvider):
 
         resp = requests.get(jar_url, auth=auth, stream=True, timeout=300)
         resp.raise_for_status()
+
+        total_bytes = int(resp.headers.get("content-length", 0))
+        total_mb = round(total_bytes / 1024 / 1024, 1) if total_bytes else None
+        _emit(
+            "download_start",
+            total_mb=total_mb,
+            msg=f"Downloading v{version} JAR"
+                + (f" ({total_mb} MB)" if total_mb else ""),
+        )
+
+        downloaded = 0
+        last_pct = -1
+        last_emit_time = time.monotonic()
+
         with open(jar_path, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=8192):
+            for chunk in resp.iter_content(chunk_size=65_536):  # 64 KB chunks
                 f.write(chunk)
+                downloaded += len(chunk)
+
+                # Emit at most once per 2 seconds or every 5% — whichever comes first
+                now = time.monotonic()
+                pct = int(downloaded / total_bytes * 100) if total_bytes else 0
+                if (now - last_emit_time >= 2.0) or (pct >= last_pct + 5):
+                    dl_mb = round(downloaded / 1024 / 1024, 1)
+                    _emit(
+                        "download_progress",
+                        downloaded_mb=dl_mb,
+                        total_mb=total_mb,
+                        pct=pct,
+                        msg=f"Downloading v{version}… "
+                            + (f"{dl_mb} / {total_mb} MB ({pct}%)" if total_mb
+                               else f"{dl_mb} MB downloaded"),
+                    )
+                    last_pct = pct
+                    last_emit_time = now
+
+        dl_mb = round(downloaded / 1024 / 1024, 1)
+        logger.info("Downloaded %.1f MB for version %s", dl_mb, version)
+        _emit("download_done", downloaded_mb=dl_mb, msg=f"Download complete ({dl_mb} MB)")
 
         # Extract (JAR is a ZIP).
         # We only need the SYSTEM artifacts tree — skip compiled Java classes,
@@ -259,6 +321,11 @@ class ArtifactoryProvider(SourceProvider):
                     len(system_members),
                     len(all_members),
                 )
+                _emit(
+                    "extract_start",
+                    files=len(system_members),
+                    msg=f"Extracting v{version} ({len(system_members):,} files)…",
+                )
                 for member in system_members:
                     zf.extract(member, extract_dir)
             else:
@@ -269,7 +336,14 @@ class ArtifactoryProvider(SourceProvider):
                     "falling back to full extraction (%d files)",
                     len(all_members),
                 )
+                _emit(
+                    "extract_start",
+                    files=len(all_members),
+                    msg=f"Extracting v{version} (full — {len(all_members):,} files)…",
+                )
                 zf.extractall(extract_dir)
+
+        _emit("extract_done", msg=f"v{version} extracted successfully")
 
         # Clean up JAR to save disk space
         jar_path.unlink(missing_ok=True)

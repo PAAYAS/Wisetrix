@@ -10,7 +10,7 @@ import threading
 import time
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from upgrade_lib.sources.artifactory_provider import ArtifactoryProvider
 from upgrade_lib.sources.git_provider import GitProvider
@@ -131,6 +131,7 @@ def resolve_project_paths(
     *,
     use_cache: bool = True,
     skip_pull: bool = False,
+    progress_cb: Callable[[str, dict], None] | None = None,
 ) -> dict[str, Any]:
     """Resolve a project config into local paths via the appropriate provider.
     Returns dict with 'source_root', 'target_system', 'baseline_system'.
@@ -166,7 +167,8 @@ def resolve_project_paths(
     if target_type == "artifactory":
         ap = ArtifactoryProvider()
         art_result = ap.resolve(
-            {**project, "source_root": resolved["source_root"]}
+            {**project, "source_root": resolved["source_root"]},
+            progress_cb=progress_cb,
         )
         resolved["target_system"] = str(art_result.target_system)
         resolved["baseline_system"] = (
@@ -190,7 +192,7 @@ def resolve_project_paths(
                 "target_version": project.get("baseline_version", ""),
             }
             try:
-                bl_result = ap.resolve(baseline_cfg)
+                bl_result = ap.resolve(baseline_cfg, progress_cb=progress_cb)
                 resolved["baseline_system"] = str(bl_result.target_system)
             except Exception:
                 resolved["baseline_system"] = ""
