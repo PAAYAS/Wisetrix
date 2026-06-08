@@ -52,8 +52,10 @@ const LOAD_PHASE_LABELS: Record<string, string> = {
   cached:                "Using cached paths — ready instantly",
   git_clone:             "Cloning git repository (first time, shallow)…",
   git_fetch:             "Fetching latest commits from git…",
-  artifactory_cached:    "Artifactory already extracted locally",
-  artifactory_download:  "Downloading Artifactory JAR…",
+  artifactory_cached:             "Target Artifactory already extracted locally",
+  artifactory_download:           "Downloading target Artifactory JAR…",
+  artifactory_baseline_cached:    "Baseline Artifactory already extracted locally",
+  artifactory_baseline_download:  "Downloading baseline Artifactory JAR…",
   scan:                  "Scanning artifact tree…",
 };
 

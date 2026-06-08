@@ -213,6 +213,23 @@ async def _artifacts_stream(project_id: str) -> AsyncIterator[dict]:
                     "(first time — usually 1–3 min)…",
                 )
 
+        # ── Baseline Artifactory (separate JAR, separate cache entry) ─────────
+        baseline_type    = project.get("baseline_type", "")
+        baseline_url     = project.get("baseline_url", "")
+        baseline_version = project.get("baseline_version", "")
+        if baseline_type == "artifactory" and baseline_url and baseline_version:
+            if _art_version_cached(baseline_version):
+                yield _phase(
+                    "artifactory_baseline_cached",
+                    f"Baseline Artifactory v{baseline_version} already extracted locally.",
+                )
+            else:
+                yield _phase(
+                    "artifactory_baseline_download",
+                    f"Downloading baseline Artifactory JAR for v{baseline_version} "
+                    "(first time — usually 1–3 min)…",
+                )
+
         # ── Run resolve in a worker thread (I/O bound) ───────────────────────
         try:
             resolved = await anyio.to_thread.run_sync(
