@@ -4,10 +4,18 @@ FastAPI service can run the same Claude-based merge pipeline."""
 from __future__ import annotations
 
 import io
+import json
+import logging
+import re
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+
+_log = logging.getLogger(__name__)
+
+# Matches BASE_*_NAME tags in JSON files (Rules 3 & 4)
+_BASE_TAG_RE = re.compile(r"^BASE_.+_NAME$")
 
 from upgrade_api.scan_util import detect_buckets
 
@@ -58,6 +66,33 @@ def _split_analysis_files(
         else:
             artifact[rel] = content
     return artifact, analysis
+
+
+def _read_base_artifact_name(files: dict[str, str]) -> str | None:
+    """Scan artifact file dict for a BASE_*_NAME tag in any JSON file.
+
+    Returns the base artifact name (e.g. "GPM_INBOUND_V2") or None.
+
+    Used when system_files is empty — the customer artifact extends a SYSTEM
+    base artifact named by this tag rather than having its own SYSTEM counterpart.
+    """
+    for rel, content in files.items():
+        if not rel.endswith(".json"):
+            continue
+        try:
+            data = json.loads(content)
+            if not isinstance(data, dict):
+                continue
+            for key, value in data.items():
+                if (
+                    _BASE_TAG_RE.match(key)
+                    and isinstance(value, str)
+                    and value.strip()
+                ):
+                    return value.strip()
+        except Exception:
+            continue
+    return None
 
 
 def _is_text(path: Path) -> bool:
@@ -151,9 +186,35 @@ def perform_merge(
     emit("reading", key=key)
     aldi_files = read_artifact_files(source_root / bucket / rel)
     system_files = read_artifact_files(target_root / rel)
+
+    # ── Rules 3 & 4: BASE_*_NAME redirect ────────────────────────────────────
+    # If the SYSTEM target has no counterpart for this artifact, check whether
+    # the customer's JSON contains a BASE_*_NAME tag that names the real SYSTEM
+    # base artifact to merge against.
+    # e.g. PTX_GPM_INBOUND_V2 / BASE_INTEGRATION_DEF_NAME = GPM_INBOUND_V2
+    #   → read system files from  target_root/integration_def/GPM_INBOUND_V2
+    base_redirect: str | None = None
+    if not system_files and aldi_files:
+        base_name = _read_base_artifact_name(aldi_files)
+        if base_name:
+            rel_parts = Path(rel).parts
+            category  = rel_parts[0] if rel_parts else ""
+            if category:
+                alt_system_dir = target_root / category / base_name
+                if alt_system_dir.exists():
+                    system_files  = read_artifact_files(alt_system_dir)
+                    base_redirect = f"{category}/{base_name}"
+                    _log.info(
+                        "[merge] BASE redirect: %s → %s (key=%s)",
+                        rel, base_redirect, key,
+                    )
+
     baseline_files: dict[str, str] = {}
     if baseline_root and str(baseline_root) and baseline_root.exists():
         baseline_files = read_artifact_files(baseline_root / rel)
+        # If the baseline also has no counterpart, try the same BASE redirect
+        if not baseline_files and base_redirect:
+            baseline_files = read_artifact_files(baseline_root / base_redirect)
 
     emit(
         "claude_merge_start",
@@ -216,12 +277,30 @@ def perform_merge(
                         emit("diff_failed", key=key, file=fname, error=str(e))
                 break
 
+    explanation = merge_res.get("explanation", "")
+
+    # ── Rule 6: business_process_policies DB warning ──────────────────────────
+    # Any change here requires manually deleting the previous DB entry before
+    # the upgrade is applied. Append this to the explanation so it's visible
+    # in the UI merge result.
+    rel_parts = Path(rel).parts
+    db_warning: str | None = None
+    if rel_parts and rel_parts[0] == "business_process_policies":
+        db_warning = (
+            "\n\n⚠ DB ACTION REQUIRED: business_process_policies artifacts "
+            "require manual DB handling. Delete the previous entry in the "
+            "database BEFORE applying the upgrade to this environment."
+        )
+        explanation = explanation + db_warning
+
     return {
         "bucket": bucket,
         "rel_path": rel,
         "merged_at": datetime.now(timezone.utc).isoformat(),
         "files": list(artifact_files.keys()),
-        "explanation": merge_res.get("explanation", ""),
+        "explanation": explanation,
+        "base_redirect": base_redirect,
+        "db_warning": db_warning,
         "diff_generated": diff_info is not None,
         "diff_error": diff_error,
         "out_dir": str(out_dir),

@@ -46,9 +46,41 @@ After deciding each file's status, roll up to an artifact-level decision:
 
 Apply these after per-artifact decisions:
 
-- If both `windowdefs/{name}` AND `adhoc_windowdefs/{name}` exist → **Remove** `windowdefs/{name}`.
+### Existing rules
+- If both `windowdefs/{name}` AND `adhoc_windowdefs/{name}` exist in **customer source** → **Remove** `windowdefs/{name}` (Rule 1).
 - If both `datasets/SEARCH/ADHOC_SEARCH_{name}` AND `datasets/REPORT/{name}` exist → **Remove** the SEARCH variant.
 - If an artifact is listed as deprecated in SYSTEM 26.2 release notes → **Remove**.
+
+### Rule 2 — windowdefs → adhoc_windowdefs promotion
+If `windowdefs/{name}` exists in the customer source but `adhoc_windowdefs/{name}` does NOT exist in the customer source — check whether `adhoc_windowdefs/{name}` exists in the **target version (SYSTEM 26.2)**. If yes:
+- **Remove** `windowdefs/{name}` from the output.
+- The customizations from `windowdefs/{name}` must be merged into `adhoc_windowdefs/{name}` of the target version.
+
+### Rules 3 & 4 — BASE_*_NAME redirect (integration_def, datasets, reports, searches, templates, windowdefs)
+When a customer artifact has **no counterpart in SYSTEM** (target does not exist), check the artifact's JSON file for a `BASE_*_NAME` tag:
+
+| Tag | Example |
+|-----|---------|
+| `BASE_INTEGRATION_DEF_NAME` | `PTX_GPM_INBOUND_V2` → `GPM_INBOUND_V2` |
+| `BASE_DATASET_NAME` | Customer dataset → SYSTEM base dataset |
+| `BASE_REPORT_NAME` | Customer report → SYSTEM base report |
+| `BASE_SEARCH_NAME` | Customer search → SYSTEM base search |
+| `BASE_TEMPLATE_NAME` | Customer template → SYSTEM base template |
+| `BASE_WINDOWDEF_NAME` | Customer windowdef → SYSTEM base windowdef |
+
+If the tag is found, **redirect** the comparison and merge to use the named SYSTEM artifact as the base — do NOT treat it as a source-only artifact. The customer artifact extends the SYSTEM base; all SYSTEM 26.2 changes to the base must be preserved.
+
+### Rule 5 — `__env_specific` bucket always Retain
+Artifacts in the `__env_specific` bucket (`__env_specific/{ENV}/{CUSTOMER}/{category}/{artifact}`) are environment-specific configurations (DEV / UAT / PROD). They have no counterpart in SYSTEM and must **never be merged** — always **Retain** as-is.
+
+### Rule 6 — business_process_policies requires manual DB handling
+If a `business_process_policies` artifact has any change (decision is Merge or Retain), **a manual DB action is required**:
+> ⚠ Delete the **previous entry** from the database BEFORE the upgrade is applied to the environment.
+
+This cannot be automated — the engineer must perform this step manually after merge and before deployment.
+
+### Rule 7 — DGS artifacts always Retain
+`dgs/` category artifacts (Document Generation System) are **not migrated** through this tool. Decision is always **Retain** — they are kept as-is without comparison against SYSTEM.
 
 ---
 

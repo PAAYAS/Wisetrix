@@ -11,17 +11,67 @@ Claude is only called for actual MERGE work (where semantics matter).
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 
 # --------------------------------------------------------------------------- #
-# Configuration (unchanged from v1)
+# Configuration
 # --------------------------------------------------------------------------- #
 
 INCLUDE_EXTS = {".json", ".xml", ".java", ".js", ".jsp"}
 EXCLUDE_NAMES = {"component.info", "security.txt"}
-RETAIN_CATEGORIES = {"custom_privilages"}
+
+# Categories that are always Retain — no comparison against SYSTEM.
+# custom_privilages: customer access config, never in SYSTEM.
+# dgs:              Document Generation System artifacts — not migrated via this tool.
+RETAIN_CATEGORIES = {"custom_privilages", "dgs"}
+
+# Regex matching any BASE_*_NAME tag in a JSON artifact file.
+# Used by Rules 3 & 4: when a customer artifact has no SYSTEM counterpart,
+# read this tag to find the SYSTEM base artifact to compare/merge against.
+# e.g. BASE_INTEGRATION_DEF_NAME, BASE_DATASET_NAME, BASE_REPORT_NAME …
+_BASE_TAG_RE = re.compile(r"^BASE_.+_NAME$")
+
+
+# --------------------------------------------------------------------------- #
+# BASE_*_NAME redirect helper  (Rules 3 & 4)
+# --------------------------------------------------------------------------- #
+
+def _read_base_artifact_name(src_artifact: Path) -> str | None:
+    """Scan JSON files in *src_artifact* for a BASE_*_NAME tag.
+
+    Returns the tag value (e.g. "GPM_INBOUND_V2") or None.
+
+    Used when the customer artifact has no counterpart in the SYSTEM target:
+    instead of treating it as source-only (Retain), we redirect the comparison
+    to the SYSTEM base artifact named by the tag.
+
+    Example:
+      PTX_GPM_INBOUND_V2/integration_def.json  →  {"BASE_INTEGRATION_DEF_NAME": "GPM_INBOUND_V2"}
+      → compare against SYSTEM/integration_def/GPM_INBOUND_V2 instead
+    """
+    if not src_artifact.is_dir():
+        return None
+    for f in src_artifact.iterdir():
+        if not f.is_file() or f.suffix.lower() != ".json":
+            continue
+        try:
+            raw = f.read_text(encoding="utf-8", errors="replace")
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                continue
+            for key, value in data.items():
+                if (
+                    _BASE_TAG_RE.match(key)
+                    and isinstance(value, str)
+                    and value.strip()
+                ):
+                    return value.strip()
+        except Exception:
+            continue
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -157,13 +207,14 @@ def compare_artifact_local(
     src_artifact: Path,
     tgt_artifact: Path,
     rel_path: str,
+    target_root: Path | None = None,
 ) -> dict:
     """
     Local, deterministic compare. Same shape as the Claude-based result so
     the UI doesn't need to branch:
 
     {
-        "decision":      "Merge" | "Retain" | "Remove",
+        "decision":       "Merge" | "Retain" | "Remove",
         "file_decisions": { filename: "Merge"|"Retain"|"No Changes" },
         "file_details":   [{file, decision, target_exists, [diff_summary]}],
         "target_exists":  bool,
@@ -171,12 +222,38 @@ def compare_artifact_local(
         "file_count":     int,
         "analysis":       "<short string explaining how the rollup happened>",
         "engine":         "local",
+        "base_redirect":  str | None,   # set when Rules 3/4 redirect applies
     }
+
+    target_root (optional) — the root of the SYSTEM artifact tree.
+    Passing it enables:
+      - Rules 3 & 4: BASE_*_NAME redirect for missing-target artifacts.
     """
     src_artifact = Path(src_artifact)
     tgt_artifact = Path(tgt_artifact)
 
     target_exists = tgt_artifact.is_dir()
+
+    # ── Rules 3 & 4: BASE_*_NAME redirect ─────────────────────────────────────
+    # When the customer artifact has no counterpart in SYSTEM (target_exists=False),
+    # read the BASE_*_NAME tag from the artifact's JSON and re-point tgt_artifact
+    # to the named SYSTEM base artifact.  This ensures the comparison/merge is done
+    # against the correct upstream, not against nothing.
+    # Example: PTX_GPM_INBOUND_V2 → BASE_INTEGRATION_DEF_NAME=GPM_INBOUND_V2
+    #          → compare against SYSTEM/integration_def/GPM_INBOUND_V2
+    base_redirect: str | None = None
+    if not target_exists and target_root is not None:
+        base_name = _read_base_artifact_name(src_artifact)
+        if base_name:
+            # category = first segment of rel_path  e.g. "integration_def"
+            parts = Path(rel_path).parts
+            category = parts[0] if parts else ""
+            if category:
+                alt_tgt = Path(target_root) / category / base_name
+                if alt_tgt.is_dir():
+                    tgt_artifact  = alt_tgt
+                    target_exists = True
+                    base_redirect = base_name
     file_decisions: dict[str, str] = {}
     file_details: list[dict] = []
 
@@ -194,6 +271,7 @@ def compare_artifact_local(
                     "decision": "Retain",
                     "target_exists": False,
                 })
+        retain_label = Path(rel_path).parts[0] if Path(rel_path).parts else "retain-only"
         return {
             "decision": "Retain",
             "file_decisions": file_decisions,
@@ -201,8 +279,9 @@ def compare_artifact_local(
             "target_exists": target_exists,
             "target_path": str(tgt_artifact),
             "file_count": len(file_decisions),
-            "analysis": "Retain-only category (custom_privilages) — source kept as-is.",
+            "analysis": f"Retain-only category ({retain_label}) — source kept as-is.",
             "engine": "local",
+            "base_redirect": None,
         }
 
     # ── Standard compare ───────────────────────────────────────────────────
@@ -262,6 +341,7 @@ def compare_artifact_local(
         "file_count": len(file_decisions),
         "analysis": analysis,
         "engine": "local",
+        "base_redirect": base_redirect,
     }
 
 
@@ -274,7 +354,10 @@ def compare_artifact_local(
 #          datasets/REPORT/{name} → Remove
 # --------------------------------------------------------------------------- #
 
-def apply_business_rules(results: dict) -> dict:
+def apply_business_rules(
+    results: dict,
+    target_root: Path | None = None,
+) -> dict:
     """
     Mutates and returns `results` (mapping of source_rel → result dict).
 
@@ -283,8 +366,12 @@ def apply_business_rules(results: dict) -> dict:
     are scoped per bucket — comparison is only against artifacts in the
     same bucket (ALDI customizations don't auto-remove SYSTEM bucket and
     vice-versa).
+
+    target_root (optional) — pass to enable Rules 2 and 5 which need to
+    inspect the SYSTEM target directory.
     """
-    # ── Rule 1: windowdefs superseded by adhoc_windowdefs ───────────────
+    # ── Rule 1 (existing): windowdefs superseded by adhoc_windowdefs ────────
+    # Build a set of adhoc_windowdefs artifact names per bucket.
     adhoc_names: dict[str, set] = {}
     for r in results.values():
         rel = r.get("rel_path", "")
@@ -305,7 +392,35 @@ def apply_business_rules(results: dict) -> dict:
                     "Auto-removed: adhoc_windowdefs counterpart exists in source"
                 )
 
-    # ── Rule 2: datasets/SEARCH superseded by datasets/REPORT ───────────
+    # ── Rule 2 (new): windowdefs → adhoc_windowdefs promotion ───────────────
+    # If a customer has windowdefs/{name} but NOT adhoc_windowdefs/{name},
+    # and the TARGET system has adhoc_windowdefs/{name}, remove the windowdefs
+    # entry and flag it for merging customizations into adhoc_windowdefs.
+    if target_root is not None:
+        tgt = Path(target_root)
+        for r in results.values():
+            rel = r.get("rel_path", "")
+            bucket = r.get("bucket", "")
+            parts = rel.split("/")
+            if (
+                parts
+                and parts[0] == "windowdefs"
+                and r.get("decision") != "Remove"
+            ):
+                name = parts[-1]
+                # Only apply if Rule 1 didn't already handle it
+                # (i.e. no adhoc counterpart in the customer source)
+                if name not in adhoc_names.get(bucket, set()):
+                    adhoc_in_target = tgt / "adhoc_windowdefs" / name
+                    if adhoc_in_target.is_dir():
+                        r["decision"] = "Remove"
+                        r["decision_note"] = (
+                            f"windowdefs promoted: adhoc_windowdefs/{name} exists in "
+                            f"target — merge {name} customizations into "
+                            f"adhoc_windowdefs/{name} of the target version"
+                        )
+
+    # ── Existing rule: datasets/SEARCH superseded by datasets/REPORT ────────
     report_names: dict[str, set] = {}
     for r in results.values():
         rel = r.get("rel_path", "")
@@ -327,5 +442,32 @@ def apply_business_rules(results: dict) -> dict:
                     r["decision_note"] = (
                         f"Auto-removed: datasets/REPORT/{base} counterpart exists in source"
                     )
+
+    # ── Rule 5 (new): __env_specific bucket always Retain ───────────────────
+    # __env_specific contains environment-specific configs (DEV/PROD/UAT).
+    # These never exist in SYSTEM and must never be merged — always Retain.
+    for r in results.values():
+        bucket = r.get("bucket", "")
+        if bucket.startswith("__env_specific"):
+            r["decision"] = "Retain"
+            r["decision_note"] = (
+                "Environment-specific artifact — always Retain, "
+                "not compared or merged against SYSTEM"
+            )
+
+    # ── Rule 6 (new): business_process_policies — DB warning ────────────────
+    # Any change in business_process_policies requires a manual DB action:
+    # the previous entry must be deleted from DB before the upgrade is applied.
+    for r in results.values():
+        category = r.get("category", "")
+        if (
+            category == "business_process_policies"
+            and r.get("decision") != "Remove"
+        ):
+            r["db_warning"] = (
+                "⚠ DB ACTION REQUIRED: business_process_policies artifacts "
+                "require manual DB handling. Delete the previous entry in the "
+                "database BEFORE applying the upgrade to this environment."
+            )
 
     return results

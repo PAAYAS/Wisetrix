@@ -369,7 +369,7 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
         }
 
         try:
-            result = compare_artifact_local(aldi_dir, sys_dir, rel)
+            result = compare_artifact_local(aldi_dir, sys_dir, rel, target_root=target_root)
             comp_results[key] = {**meta, **result}
             decision = result.get("decision", "?")
         except Exception as e:
@@ -392,7 +392,7 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
         await asyncio.sleep(0)
 
     yield {"event": "phase", "data": json.dumps({"phase": "rollup"})}
-    comp_results = apply_business_rules(comp_results)
+    comp_results = apply_business_rules(comp_results, target_root=target_root)
 
     yield {"event": "phase", "data": json.dumps({"phase": "risk"})}
     scorer = RiskScorer()
