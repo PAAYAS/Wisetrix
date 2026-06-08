@@ -405,19 +405,34 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
         rel = art["rel_path"]
         bucket = art["bucket"]
         customer_dir = source_root / bucket / rel
-        sys_dir = target_root / rel
+
+        # ── __env_specific: strip {ENV}/{CUSTOMER}/ prefix ───────────────────
+        # rel_path for env_specific is  {ENV}/{CUSTOMER}/{category}/…/{name}
+        # e.g.  DEV/AGCO/datasets/REPORT/MY_REPORT
+        # SYSTEM has no  DEV/AGCO/ prefix → strip first 2 segments to find
+        # the real SYSTEM counterpart at  target_root/datasets/REPORT/MY_REPORT
+        system_rel = rel   # used for SYSTEM lookup; equals rel for normal artifacts
+        if bucket.startswith("__env_specific"):
+            parts = Path(rel).parts
+            if len(parts) >= 3:
+                system_rel = "/".join(parts[2:])   # strip ENV + CUSTOMER
+
+        sys_dir = target_root / system_rel
 
         meta = {
             "bucket": bucket,
             "category": art["category"],
             "name": art["name"],
             "rel_path": rel,
+            "system_rel_path": system_rel,   # stripped path for SYSTEM/baseline lookup
             "source_rel": key,
             "decided_at": datetime.now(timezone.utc).isoformat(),
         }
 
         try:
-            result = compare_artifact_local(customer_dir, sys_dir, rel, target_root=target_root)
+            # Pass system_rel so BASE redirect and category detection work on the
+            # real artifact path, not the  DEV/AGCO/…  env_specific prefix.
+            result = compare_artifact_local(customer_dir, sys_dir, system_rel, target_root=target_root)
             comp_results[key] = {**meta, **result}
             decision = result.get("decision", "?")
         except Exception as e:

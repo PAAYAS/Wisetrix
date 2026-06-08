@@ -183,9 +183,14 @@ def perform_merge(
     rel = entry.get("rel_path", key)
     bucket = entry.get("bucket") or default_bucket
 
+    # For __env_specific artifacts the rel_path contains {ENV}/{CUSTOMER}/ prefix
+    # which doesn't exist in SYSTEM.  scan.py stores the stripped path so we can
+    # look up the real SYSTEM counterpart (e.g. datasets/REPORT/MY_REPORT).
+    system_rel = entry.get("system_rel_path") or rel
+
     emit("reading", key=key)
     customer_files = read_artifact_files(source_root / bucket / rel)
-    system_files = read_artifact_files(target_root / rel)
+    system_files = read_artifact_files(target_root / system_rel)
 
     # ── Rules 3 & 4: BASE_*_NAME redirect ────────────────────────────────────
     # If the SYSTEM target has no counterpart for this artifact, check whether
@@ -211,7 +216,7 @@ def perform_merge(
 
     baseline_files: dict[str, str] = {}
     if baseline_root and str(baseline_root) and baseline_root.exists():
-        baseline_files = read_artifact_files(baseline_root / rel)
+        baseline_files = read_artifact_files(baseline_root / system_rel)
         # If the baseline also has no counterpart, try the same BASE redirect
         if not baseline_files and base_redirect:
             baseline_files = read_artifact_files(baseline_root / base_redirect)

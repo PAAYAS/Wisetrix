@@ -443,16 +443,34 @@ def apply_business_rules(
                         f"Auto-removed: datasets/REPORT/{base} counterpart exists in source"
                     )
 
-    # ── Rule 5 (new): __env_specific bucket always Retain ───────────────────
-    # __env_specific contains environment-specific configs (DEV/PROD/UAT).
-    # These never exist in SYSTEM and must never be merged — always Retain.
+    # ── Rule 5 (new): __env_specific bucket ─────────────────────────────────
+    # rel_path for __env_specific artifacts is  {ENV}/{CUSTOMER}/{category}/…
+    # scan.py strips the ENV/CUSTOMER prefix and looks up the SYSTEM counterpart.
+    # Two cases:
+    #   a) target_exists=False → no SYSTEM counterpart (e.g. integration_def_config)
+    #      → always Retain: purely env-specific config, nothing to compare against
+    #   b) target_exists=True  → SYSTEM has this artifact type (e.g. datasets/REPORT)
+    #      → keep the real comparison result (may be Merge/Retain/Remove) so that
+    #        structural changes in SYSTEM 26.2 are caught and surfaced to the engineer
     for r in results.values():
         bucket = r.get("bucket", "")
-        if bucket.startswith("__env_specific"):
+        if not bucket.startswith("__env_specific"):
+            continue
+        if not r.get("target_exists", False):
+            # Case a: no SYSTEM counterpart — pure env config
             r["decision"] = "Retain"
             r["decision_note"] = (
-                "Environment-specific artifact — always Retain, "
-                "not compared or merged against SYSTEM"
+                "Environment-specific artifact — no SYSTEM counterpart, "
+                "retained as-is (e.g. integration_def_config transport settings)"
+            )
+        else:
+            # Case b: SYSTEM has this artifact — keep comparison result,
+            # but annotate so the engineer knows it is env-specific
+            existing = r.get("decision_note", "")
+            r["decision_note"] = (
+                f"[env_specific] {existing}".strip() if existing
+                else "[env_specific] Compared against SYSTEM base artifact — "
+                     "preserve environment-specific values, adopt SYSTEM structural changes"
             )
 
     # ── Rule 6 (new): business_process_policies — DB warning ────────────────
