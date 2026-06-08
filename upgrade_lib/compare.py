@@ -320,6 +320,15 @@ def compare_artifact_local(
 
     artifact_decision = _artifact_decision(file_decisions)
 
+    # ── BASE redirect always forces Merge ─────────────────────────────────────
+    # When a BASE_*_NAME tag redirected us to a different SYSTEM artifact, the
+    # customer artifact is a CUSTOM EXTENSION of that SYSTEM base.  Even if
+    # individual files appear identical, SYSTEM 26.2 may have changed the base
+    # and Claude must evaluate and apply those changes.
+    # We never auto-Remove or skip a BASE redirect artifact.
+    if base_redirect is not None and target_exists:
+        artifact_decision = "Merge"
+
     # Brief human-readable analysis
     counts = {}
     for v in file_decisions.values():
@@ -332,6 +341,8 @@ def compare_artifact_local(
     )
     if not target_exists:
         analysis += "  Target artifact does not exist — source-only."
+    if base_redirect is not None and target_exists:
+        analysis += f"  BASE redirect → {base_redirect} — always Merge."
 
     return {
         "decision": artifact_decision,
