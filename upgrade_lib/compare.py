@@ -254,6 +254,27 @@ def compare_artifact_local(
                     tgt_artifact  = alt_tgt
                     target_exists = True
                     base_redirect = base_name
+
+    # ── impl. prefix convention ────────────────────────────────────────────────
+    # AGCO (and some other customers) prefix their custom implementations of
+    # SYSTEM universes/datasets with "impl." (case-insensitive).
+    # Example: impl.trade.fta.universe.CampUniverse
+    #       →  trade.fta.universe.CampUniverse  (SYSTEM base)
+    # If no BASE tag was found AND the artifact name starts with "impl.", try
+    # looking up the SYSTEM artifact with the prefix stripped.
+    if not target_exists and target_root is not None and base_redirect is None:
+        parts = Path(rel_path).parts
+        artifact_name = parts[-1] if parts else ""
+        if artifact_name.lower().startswith("impl."):
+            base_name = artifact_name[5:]          # strip "impl." (5 chars)
+            category  = parts[0] if parts else ""
+            if category and base_name:
+                alt_tgt = Path(target_root) / category / base_name
+                if alt_tgt.is_dir():
+                    tgt_artifact  = alt_tgt
+                    target_exists = True
+                    base_redirect = base_name
+
     file_decisions: dict[str, str] = {}
     file_details: list[dict] = []
 

@@ -200,19 +200,28 @@ def perform_merge(
     #   → read system files from  target_root/integration_def/GPM_INBOUND_V2
     base_redirect: str | None = None
     if not system_files and customer_files:
+        rel_parts = Path(system_rel).parts
+        category  = rel_parts[0] if rel_parts else ""
+
+        # Try BASE_*_NAME tag first (Rules 3 & 4)
         base_name = _read_base_artifact_name(customer_files)
-        if base_name:
-            rel_parts = Path(rel).parts
-            category  = rel_parts[0] if rel_parts else ""
-            if category:
-                alt_system_dir = target_root / category / base_name
+        if base_name and category:
+            alt_system_dir = target_root / category / base_name
+            if alt_system_dir.exists():
+                system_files  = read_artifact_files(alt_system_dir)
+                base_redirect = f"{category}/{base_name}"
+                _log.info("[merge] BASE tag redirect: %s → %s (key=%s)", system_rel, base_redirect, key)
+
+        # Try impl. prefix convention if BASE tag gave nothing
+        if not system_files and category:
+            artifact_name = rel_parts[-1] if rel_parts else ""
+            if artifact_name.lower().startswith("impl."):
+                impl_base = artifact_name[5:]   # strip "impl."
+                alt_system_dir = target_root / category / impl_base
                 if alt_system_dir.exists():
                     system_files  = read_artifact_files(alt_system_dir)
-                    base_redirect = f"{category}/{base_name}"
-                    _log.info(
-                        "[merge] BASE redirect: %s → %s (key=%s)",
-                        rel, base_redirect, key,
-                    )
+                    base_redirect = f"{category}/{impl_base}"
+                    _log.info("[merge] impl. prefix redirect: %s → %s (key=%s)", system_rel, base_redirect, key)
 
     baseline_files: dict[str, str] = {}
     if baseline_root and str(baseline_root) and baseline_root.exists():
