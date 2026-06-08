@@ -205,6 +205,9 @@ export default function MergesPage({ params }: { params: { id: string } }) {
       const d = JSON.parse((e as MessageEvent).data);
       setBulk((b) => ({ ...b, succeeded: b.succeeded + 1 }));
       toast.success(`Merged ${d.key}`);
+      // Refresh the metrics (Pending / Merged counts) after each artifact
+      // so the cards update in real-time, not just at batch completion.
+      void reload();
     });
     es.addEventListener("failed", (e) => {
       const d = JSON.parse((e as MessageEvent).data);
