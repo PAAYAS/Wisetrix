@@ -201,12 +201,15 @@ def perform_merge(
     base_redirect: str | None = None
     if not system_files and customer_files:
         rel_parts = Path(system_rel).parts
-        category  = rel_parts[0] if rel_parts else ""
+        # category = ALL segments except the artifact name (last part).
+        # e.g. "integration_def/PTX_GPM_INBOUND_V2"       → "integration_def"
+        #      "datasets/REPORT_TEMPLATE/impl.trade.fta.*" → "datasets/REPORT_TEMPLATE"
+        #      "datasets/SEARCH/Impl.*"                    → "datasets/SEARCH"
+        category = "/".join(rel_parts[:-1]) if len(rel_parts) >= 2 else ""
 
-        # Rules 3 & 4: read BASE_*_NAME tag from any JSON file in the artifact
-        # This covers all artifact types: integration_def, datasets/REPORT_TEMPLATE,
+        # Rules 3 & 4: read BASE_*_NAME tag from any JSON file in the artifact.
+        # Covers all artifact types: integration_def, datasets/REPORT_TEMPLATE,
         # datasets/SEARCH, datasets/REPORT, windowdefs, etc.
-        # Tag examples: BASE_INTEGRATION_DEF_NAME, BASE_DATASETDEF_NAME, BASE_WINDOWDEF_NAME
         base_name = _read_base_artifact_name(customer_files)
         if base_name and category:
             alt_system_dir = target_root / category / base_name

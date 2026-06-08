@@ -245,9 +245,12 @@ def compare_artifact_local(
     if not target_exists and target_root is not None:
         base_name = _read_base_artifact_name(src_artifact)
         if base_name:
-            # category = first segment of rel_path  e.g. "integration_def"
+            # category = ALL segments except the artifact name (last part).
+            # e.g. "integration_def/PTX_GPM_INBOUND_V2"       → "integration_def"
+            #      "datasets/REPORT_TEMPLATE/impl.trade.fta.*" → "datasets/REPORT_TEMPLATE"
+            #      "datasets/SEARCH/Impl.*"                    → "datasets/SEARCH"
             parts = Path(rel_path).parts
-            category = parts[0] if parts else ""
+            category = "/".join(parts[:-1]) if len(parts) >= 2 else ""
             if category:
                 alt_tgt = Path(target_root) / category / base_name
                 if alt_tgt.is_dir():
