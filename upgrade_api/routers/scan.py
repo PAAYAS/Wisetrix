@@ -356,7 +356,7 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
         key = art["source_rel"]
         rel = art["rel_path"]
         bucket = art["bucket"]
-        aldi_dir = source_root / bucket / rel
+        customer_dir = source_root / bucket / rel
         sys_dir = target_root / rel
 
         meta = {
@@ -369,7 +369,7 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
         }
 
         try:
-            result = compare_artifact_local(aldi_dir, sys_dir, rel, target_root=target_root)
+            result = compare_artifact_local(customer_dir, sys_dir, rel, target_root=target_root)
             comp_results[key] = {**meta, **result}
             decision = result.get("decision", "?")
         except Exception as e:

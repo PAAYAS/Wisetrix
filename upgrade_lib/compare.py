@@ -110,21 +110,21 @@ def _compare_xml(src: str, tgt: str) -> bool:
         )
 
 
-def _is_comment_only_change(aldi_lines: list, sys_lines: list) -> bool:
+def _is_comment_only_change(src_lines: list, sys_lines: list) -> bool:
     """
-    True if the only difference between aldi_lines and sys_lines is comment
+    True if the only difference between src_lines and sys_lines is comment
     markers on one side — meaning an intentional enable/disable decision.
 
     Covers per-line, same line count:
-      1. ALDI:  // code     SYSTEM:  code
-      2. ALDI:  code        SYSTEM:  // code
-      3. ALDI:  /* code     SYSTEM:  code
-      4. ALDI:  code        SYSTEM:  /* code
+      1. source:  // code     SYSTEM:  code
+      2. source:  code        SYSTEM:  // code
+      3. source:  /* code     SYSTEM:  code
+      4. source:  code        SYSTEM:  /* code
       5. */ vs blank/whitespace (either side)
     """
-    if len(aldi_lines) != len(sys_lines):
+    if len(src_lines) != len(sys_lines):
         return False
-    for a_line, s_line in zip(aldi_lines, sys_lines):
+    for a_line, s_line in zip(src_lines, sys_lines):
         a = a_line.strip()
         s = s_line.strip()
         if a == s:
@@ -153,7 +153,7 @@ def _compare_code(src: str, tgt: str) -> bool:
         return s.replace("\r\n", "\n").replace("\r", "\n").strip()
     if n(src) == n(tgt):
         return True
-    return _is_comment_only_change(n(src).splitlines(), n(tgt).splitlines())
+    return _is_comment_only_change(n(src).splitlines(), n(tgt).splitlines())  # src_lines, sys_lines
 
 
 def _compare_files(src_path: str, tgt_path: str) -> str:

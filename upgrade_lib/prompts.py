@@ -96,7 +96,7 @@ REVIEW_PROMPT = """Review the merged output of an upgrade for correctness and sa
 {merged_files}
 
 ## {customer} files (source — customer customizations)
-{aldi_files}
+{customer_files}
 
 ## SYSTEM 26.2 files (target)
 {system_files}

@@ -184,7 +184,7 @@ def perform_merge(
     bucket = entry.get("bucket") or default_bucket
 
     emit("reading", key=key)
-    aldi_files = read_artifact_files(source_root / bucket / rel)
+    customer_files = read_artifact_files(source_root / bucket / rel)
     system_files = read_artifact_files(target_root / rel)
 
     # ── Rules 3 & 4: BASE_*_NAME redirect ────────────────────────────────────
@@ -194,8 +194,8 @@ def perform_merge(
     # e.g. PTX_GPM_INBOUND_V2 / BASE_INTEGRATION_DEF_NAME = GPM_INBOUND_V2
     #   → read system files from  target_root/integration_def/GPM_INBOUND_V2
     base_redirect: str | None = None
-    if not system_files and aldi_files:
-        base_name = _read_base_artifact_name(aldi_files)
+    if not system_files and customer_files:
+        base_name = _read_base_artifact_name(customer_files)
         if base_name:
             rel_parts = Path(rel).parts
             category  = rel_parts[0] if rel_parts else ""
@@ -219,11 +219,11 @@ def perform_merge(
     emit(
         "claude_merge_start",
         key=key,
-        files=len(aldi_files),
+        files=len(customer_files),
         has_baseline=bool(baseline_files),
     )
     merge_res = client.merge_artifact(
-        aldi_files, system_files, baseline_files, customer=bucket
+        customer_files, system_files, baseline_files, customer=bucket
     )
     artifact_files, analysis_files = _split_analysis_files(merge_res["merged_files"])
     emit("claude_merge_done", key=key, files=len(artifact_files))
@@ -248,7 +248,7 @@ def perform_merge(
     diff_info = None
     diff_error: str | None = None
     customer_has_diff = any(
-        name.endswith("_diff.json") for name in aldi_files
+        name.endswith("_diff.json") for name in customer_files
     )
     if not skip_diff and not customer_has_diff:
         emit("diff_skipped", key=key, reason="no _diff.json in customer artifact")

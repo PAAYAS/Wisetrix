@@ -70,21 +70,21 @@ class UpgradeClient:
 
     def compare_artifact(
         self,
-        aldi_files: dict[str, str],
+        customer_files: dict[str, str],
         system_files: dict[str, str],
         customer: str | None = None,
     ) -> dict[str, Any]:
         """Claude-based compare (rarely used — local compare is preferred)."""
-        return self._merge.merge(aldi_files, system_files, customer=customer)
+        return self._merge.merge(customer_files, system_files, customer=customer)
 
     def merge_artifact(
         self,
-        aldi_files: dict[str, str],
+        customer_files: dict[str, str],
         system_files: dict[str, str],
         baseline_files: dict[str, str] | None = None,
         customer: str | None = None,
     ) -> dict[str, Any]:
-        return self._merge.merge(aldi_files, system_files, baseline_files, customer)
+        return self._merge.merge(customer_files, system_files, baseline_files, customer)
 
     def generate_diff_json(
         self,
@@ -101,12 +101,12 @@ class UpgradeClient:
     def review_merge(
         self,
         merged_files: dict[str, str],
-        aldi_files: dict[str, str],
+        customer_files: dict[str, str],
         system_files: dict[str, str],
         customer: str | None = None,
     ) -> str:
         """Legacy review returning freeform markdown."""
-        return self._review.review_markdown(merged_files, aldi_files, system_files, customer)
+        return self._review.review_markdown(merged_files, customer_files, system_files, customer)
 
     def review_merge_structured(
         self,

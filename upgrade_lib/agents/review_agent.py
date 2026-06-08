@@ -100,7 +100,7 @@ class ReviewAgent(BaseAgent):
         cust = customer or prompts.DEFAULT_CUSTOMER
         prompt = prompts.REVIEW_PROMPT.format(
             merged_files=render_files(merged_files),
-            aldi_files=render_files(customer_files),
+            customer_files=render_files(customer_files),
             system_files=render_files(system_files),
             customer=cust,
         )
