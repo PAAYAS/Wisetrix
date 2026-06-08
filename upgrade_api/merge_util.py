@@ -203,7 +203,10 @@ def perform_merge(
         rel_parts = Path(system_rel).parts
         category  = rel_parts[0] if rel_parts else ""
 
-        # Try BASE_*_NAME tag first (Rules 3 & 4)
+        # Rules 3 & 4: read BASE_*_NAME tag from any JSON file in the artifact
+        # This covers all artifact types: integration_def, datasets/REPORT_TEMPLATE,
+        # datasets/SEARCH, datasets/REPORT, windowdefs, etc.
+        # Tag examples: BASE_INTEGRATION_DEF_NAME, BASE_DATASETDEF_NAME, BASE_WINDOWDEF_NAME
         base_name = _read_base_artifact_name(customer_files)
         if base_name and category:
             alt_system_dir = target_root / category / base_name
@@ -211,17 +214,6 @@ def perform_merge(
                 system_files  = read_artifact_files(alt_system_dir)
                 base_redirect = f"{category}/{base_name}"
                 _log.info("[merge] BASE tag redirect: %s → %s (key=%s)", system_rel, base_redirect, key)
-
-        # Try impl. prefix convention if BASE tag gave nothing
-        if not system_files and category:
-            artifact_name = rel_parts[-1] if rel_parts else ""
-            if artifact_name.lower().startswith("impl."):
-                impl_base = artifact_name[5:]   # strip "impl."
-                alt_system_dir = target_root / category / impl_base
-                if alt_system_dir.exists():
-                    system_files  = read_artifact_files(alt_system_dir)
-                    base_redirect = f"{category}/{impl_base}"
-                    _log.info("[merge] impl. prefix redirect: %s → %s (key=%s)", system_rel, base_redirect, key)
 
     baseline_files: dict[str, str] = {}
     if baseline_root and str(baseline_root) and baseline_root.exists():
