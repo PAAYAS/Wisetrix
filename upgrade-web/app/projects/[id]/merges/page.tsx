@@ -494,7 +494,14 @@ export default function MergesPage({ params }: { params: { id: string } }) {
                           findings={rec.quality_result?.findings}
                         />
                       </td>
-                      <td className="px-4 py-2 font-mono text-xs">{key}</td>
+                      <td className="px-4 py-2 font-mono text-xs">
+                        {key}
+                        {rec.db_warning && (
+                          <div className="mt-1 inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                            ⚠ DB action required before upgrade
+                          </div>
+                        )}
+                      </td>
                       <td className="px-4 py-2 text-muted-foreground">
                         {rec.files.length}
                       </td>
@@ -568,6 +575,11 @@ function PendingRow({
           </span>
         ) : (
           (entry.analysis ?? "").slice(0, 120)
+        )}
+        {entry.db_warning && (
+          <div className="mt-1 inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+            ⚠ DB action required before upgrade
+          </div>
         )}
       </td>
       <td className="px-4 py-2 text-right">

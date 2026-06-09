@@ -623,6 +623,11 @@ export default function ScanPage({ params }: { params: { id: string } }) {
                       </td>
                       <td className="px-4 py-2 text-muted-foreground">
                         {r.decision_note ?? r.error ?? r.analysis ?? ""}
+                        {r.db_warning && (
+                          <div className="mt-1 inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                            ⚠ DB action required before upgrade
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}

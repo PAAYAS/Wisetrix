@@ -159,6 +159,7 @@ export interface ComparisonResult {
   risk_level?: RiskLevel;
   risk_score?: number;
   decision_note?: string;
+  db_warning?: string;
   error?: string;
   decided_at?: string;
 }
@@ -186,6 +187,7 @@ export interface MergeRecord {
   rel_path: string;
   merged_at: string;
   merge_duration_seconds: number | null;
+  db_warning?: string | null;
   files: string[];
   explanation: string;
   diff_generated: boolean;
