@@ -215,7 +215,20 @@ def _customer_has_unique_content(src: object, tgt: object) -> bool:
                 return False   # all AGCO records exist unchanged in SYSTEM
         return src != tgt   # plain list — fall back to equality
 
-    return src != tgt   # scalar: any difference is unique content
+    # Semicolon-separated fields (e.g. LICENSE: "TRADE:IMPORT_LITE;TRADE:EXPORT")
+    # SYSTEM may add new values to these fields during an upgrade.
+    # If AGCO's set of values is a subset of SYSTEM's, AGCO has nothing unique.
+    # Example:
+    #   AGCO:   TRADE:IMPORT_LITE;TRADE:EXPORT_EXPRESS
+    #   SYSTEM: TRADE:IMPORT_LITE;TRADE:EXPORT_EXPRESS;TRADE:CARGO_SCREENING
+    #   → AGCO subset of SYSTEM → no unique content (return False)
+    if isinstance(src, str) and isinstance(tgt, str) and ";" in (src + tgt):
+        agco_parts = {p.strip() for p in src.split(";") if p.strip()}
+        sys_parts  = {p.strip() for p in tgt.split(";") if p.strip()}
+        if agco_parts <= sys_parts:   # AGCO is a subset of SYSTEM
+            return False
+
+    return src != tgt   # scalar: any other difference is unique content
 
 
 def _compare_json(src: str, tgt: str) -> bool:
