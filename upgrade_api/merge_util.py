@@ -291,15 +291,15 @@ def perform_merge(
     merge_duration_seconds = round(time.monotonic() - merge_start, 1)
     explanation = merge_res.get("explanation", "")
 
-    # ── Rule 6: business_process_policies DB warning ──────────────────────────
-    # Any change here requires manually deleting the previous DB entry before
-    # the upgrade is applied. Append this to the explanation so it's visible
-    # in the UI merge result.
+    # ── Rule 6: bizpolicydefs / bizruledefs / multilegresolver — DB warning ──
+    # These artifact types are stored both as files AND as database records.
+    # The old DB entry must be deleted before upgrade to avoid conflicts.
     rel_parts = Path(rel).parts
     db_warning: str | None = None
-    if rel_parts and rel_parts[0] == "business_process_policies":
+    artifact_category = rel_parts[0] if rel_parts else ""
+    if artifact_category in {"bizpolicydefs", "bizruledefs", "multilegresolver"}:
         db_warning = (
-            "\n\n⚠ DB ACTION REQUIRED: business_process_policies artifacts "
+            f"\n\n⚠ DB ACTION REQUIRED: {artifact_category} artifacts "
             "require manual DB handling. Delete the previous entry in the "
             "database BEFORE applying the upgrade to this environment."
         )

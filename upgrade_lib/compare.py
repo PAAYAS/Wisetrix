@@ -28,6 +28,11 @@ EXCLUDE_NAMES = {"component.info", "security.txt"}
 # dgs:              Document Generation System artifacts — not migrated via this tool.
 RETAIN_CATEGORIES = {"custom_privilages", "dgs"}
 
+# Categories that require a manual DB action before the upgrade is applied.
+# Artifacts in these categories are stored both as files AND as database records.
+# The old DB entry must be deleted before the upgrade so there is no conflict.
+DB_WARNING_CATEGORIES = {"bizpolicydefs", "bizruledefs", "multilegresolver"}
+
 # Regex matching any BASE_*_NAME tag in a JSON artifact file.
 # Used by Rules 3 & 4: when a customer artifact has no SYSTEM counterpart,
 # read this tag to find the SYSTEM base artifact to compare/merge against.
@@ -488,19 +493,20 @@ def apply_business_rules(
                      "preserve environment-specific values, adopt SYSTEM structural changes"
             )
 
-    # ── Rule 6 (new): business_process_policies — DB warning ────────────────
-    # Any change in business_process_policies requires a manual DB action:
-    # the previous entry must be deleted from DB before the upgrade is applied.
+    # ── Rule 6 (new): bizpolicydefs / bizruledefs / multilegresolver — DB warning
+    # These artifact types are stored both as files AND as database records.
+    # The previous DB entry must be deleted before the upgrade is applied,
+    # otherwise the upgrade will conflict with the existing record.
     for r in results.values():
         category = r.get("category", "")
         if (
-            category == "business_process_policies"
+            category in DB_WARNING_CATEGORIES
             and r.get("decision") != "Remove"
         ):
             r["db_warning"] = (
-                "⚠ DB ACTION REQUIRED: business_process_policies artifacts "
-                "require manual DB handling. Delete the previous entry in the "
-                "database BEFORE applying the upgrade to this environment."
+                f"⚠ DB ACTION REQUIRED: {category} artifacts require manual "
+                "DB handling. Delete the previous entry in the database "
+                "BEFORE applying the upgrade to this environment."
             )
 
     return results

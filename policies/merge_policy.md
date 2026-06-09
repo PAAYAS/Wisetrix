@@ -73,9 +73,14 @@ If the tag is found, **redirect** the comparison and merge to use the named SYST
 ### Rule 5 — `__env_specific` bucket always Retain
 Artifacts in the `__env_specific` bucket (`__env_specific/{ENV}/{CUSTOMER}/{category}/{artifact}`) are environment-specific configurations (DEV / UAT / PROD). They have no counterpart in SYSTEM and must **never be merged** — always **Retain** as-is.
 
-### Rule 6 — business_process_policies requires manual DB handling
-If a `business_process_policies` artifact has any change (decision is Merge or Retain), **a manual DB action is required**:
+### Rule 6 — bizpolicydefs / bizruledefs / multilegresolver require manual DB handling
+If an artifact in any of these categories has any change (decision is Merge or Retain), **a manual DB action is required**:
 > ⚠ Delete the **previous entry** from the database BEFORE the upgrade is applied to the environment.
+
+Affected categories:
+- `bizpolicydefs`
+- `bizruledefs`
+- `multilegresolver`
 
 This cannot be automated — the engineer must perform this step manually after merge and before deployment.
 
