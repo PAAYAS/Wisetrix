@@ -77,10 +77,8 @@ Artifacts in the `__env_specific` bucket (`__env_specific/{ENV}/{CUSTOMER}/{cate
 If an artifact in any of these categories has any change (decision is Merge or Retain), **a manual DB action is required**:
 > ⚠ Delete the **previous entry** from the database BEFORE the upgrade is applied to the environment.
 
-Affected categories:
+Affected category:
 - `bizpolicydefs`
-- `bizruledefs`
-- `multilegresolver`
 
 This cannot be automated — the engineer must perform this step manually after merge and before deployment.
 

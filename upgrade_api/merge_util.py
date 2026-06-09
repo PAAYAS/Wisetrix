@@ -297,7 +297,7 @@ def perform_merge(
     rel_parts = Path(rel).parts
     db_warning: str | None = None
     artifact_category = rel_parts[0] if rel_parts else ""
-    if artifact_category in {"bizpolicydefs", "bizruledefs", "multilegresolver"}:
+    if artifact_category in {"bizpolicydefs"}:
         db_warning = (
             f"\n\n⚠ DB ACTION REQUIRED: {artifact_category} artifacts "
             "require manual DB handling. Delete the previous entry in the "

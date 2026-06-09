@@ -31,7 +31,7 @@ RETAIN_CATEGORIES = {"custom_privilages", "dgs"}
 # Categories that require a manual DB action before the upgrade is applied.
 # Artifacts in these categories are stored both as files AND as database records.
 # The old DB entry must be deleted before the upgrade so there is no conflict.
-DB_WARNING_CATEGORIES = {"bizpolicydefs", "bizruledefs", "multilegresolver"}
+DB_WARNING_CATEGORIES = {"bizpolicydefs"}
 
 # Regex matching any BASE_*_NAME tag in a JSON artifact file.
 # Used by Rules 3 & 4: when a customer artifact has no SYSTEM counterpart,
