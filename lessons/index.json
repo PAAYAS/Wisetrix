@@ -1,1 +1,16 @@
-[]
+[
+  {
+    "id": "fb60d913dcb243ec87df8eaa6ce97b42",
+    "agent_name": "diff",
+    "error_type": "success_after_retry",
+    "artifact_category": "",
+    "file_extensions": [],
+    "keywords": [
+      "succeeded",
+      "attempt"
+    ],
+    "outcome": "fixed",
+    "created_at": "2026-06-08T12:37:38.456358+00:00",
+    "usage_count": 0
+  }
+]

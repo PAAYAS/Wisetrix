@@ -10,11 +10,11 @@
 # ---------------------------------------------------------------------------
 artifactory:
   # Base URL of your Artifactory instance (no trailing slash)
-  base_url: https://your-artifactory.example.com/artifactory
+  base_url: "https://your-artifactory.example.com/artifactory"
 
   # Basic-auth credentials for downloading GTM release JARs
-  username: your-artifactory-username
-  password: your-artifactory-password-or-api-token
+  username: "your-artifactory-username"
+  password: "your-artifactory-password-or-api-token"
 
 # ---------------------------------------------------------------------------
 # JIRA — ticket tracking integration
@@ -24,8 +24,17 @@ jira:
   enabled: false
 
   # Base URL of your JIRA instance (no trailing slash)
-  base_url: https://your-jira.example.com
+  base_url: "https://your-jira.example.com"
 
   # JIRA credentials (use an API token, not your login password)
-  username: your-jira-email@example.com
-  password: your-jira-api-token
+  username: "your-jira-email@example.com"
+  password: "your-jira-api-token"
+
+# ---------------------------------------------------------------------------
+# Git — Github clone credentials
+# ---------------------------------------------------------------------------
+git:
+  # Git credentials (optional — only needed for private repos over HTTPS)
+  # For SSH repos, configure your SSH key instead.
+  username: "your-git-email@example.com"
+  password: "your-git-api-token"  # Personal access token
