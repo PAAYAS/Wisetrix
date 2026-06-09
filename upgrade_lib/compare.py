@@ -158,6 +158,54 @@ def _normalize_for_comparison(obj: object) -> object:
     return obj
 
 
+def _customer_has_unique_content(src: object, tgt: object) -> bool:
+    """Return True if src (customer) has any content that tgt (SYSTEM) does not.
+
+    Used to decide whether to show the "no customer-specific content" note.
+
+    False means the customer artifact is a subset of SYSTEM — after merge
+    the result would be identical to SYSTEM, so the artifact could be
+    removed from customer git and taken directly from SYSTEM instead.
+
+    Scenarios that return False (note fires):
+      - SYSTEM added a new rule AGCO doesn't have, AGCO has nothing unique
+    Scenarios that return True (note suppressed):
+      - AGCO modified an existing rule value
+      - AGCO added a new rule SYSTEM doesn't have
+      - AGCO has any field with a different value (non-noise fields)
+    """
+    if isinstance(src, dict) and isinstance(tgt, dict):
+        for k, v in src.items():
+            if k not in tgt:
+                return True   # AGCO has a key SYSTEM doesn't → unique
+            if _customer_has_unique_content(v, tgt[k]):
+                return True
+        return False
+
+    if isinstance(src, list) and isinstance(tgt, list):
+        if src and isinstance(src[0], dict):
+            # Find the identity key used for this array
+            for id_key in _ARRAY_IDENTITY_KEYS:
+                if any(id_key in item for item in src if isinstance(item, dict)):
+                    tgt_by_id = {
+                        item.get(id_key): item
+                        for item in tgt
+                        if isinstance(item, dict)
+                    }
+                    for src_item in src:
+                        if not isinstance(src_item, dict):
+                            continue
+                        key_val = src_item.get(id_key)
+                        if key_val not in tgt_by_id:
+                            return True   # AGCO has a record SYSTEM doesn't
+                        if _customer_has_unique_content(src_item, tgt_by_id[key_val]):
+                            return True   # same record but AGCO modified it
+                    return False   # all AGCO records exist unchanged in SYSTEM
+        return src != tgt   # plain list — fall back to equality
+
+    return src != tgt   # scalar: any difference is unique content
+
+
 def _compare_json(src: str, tgt: str) -> bool:
     """Semantic JSON compare.
 
@@ -348,6 +396,11 @@ def compare_artifact_local(
 
     file_decisions: dict[str, str] = {}
     file_details: list[dict] = []
+    # Tracks whether every JSON file that produced a Merge decision has
+    # no customer-unique content (AGCO is a subset of SYSTEM).
+    # Used to set the no_customer_content_note on the artifact.
+    _merge_json_count = 0
+    _all_merge_json_no_unique = True
 
     # ── Retain-only category: skip comparison, all files = Retain ──────────
     if _is_retain_category(rel_path):
@@ -374,6 +427,7 @@ def compare_artifact_local(
             "analysis": f"Retain-only category ({retain_label}) — source kept as-is.",
             "engine": "local",
             "base_redirect": None,
+            "no_customer_content_note": None,
         }
 
     # ── Standard compare ───────────────────────────────────────────────────
@@ -398,8 +452,28 @@ def compare_artifact_local(
                     decision = "No Changes"
                 elif cmp == "different":
                     decision = "Merge"
+                    # For JSON files, check whether AGCO has anything unique.
+                    # If not, the file contributes to the no_customer_content note.
+                    if f.suffix.lower() == ".json":
+                        _merge_json_count += 1
+                        try:
+                            src_norm = _normalize_for_comparison(
+                                json.loads(_read(str(f)))
+                            )
+                            tgt_norm = _normalize_for_comparison(
+                                json.loads(_read(str(tgt_file)))
+                            )
+                            if _customer_has_unique_content(src_norm, tgt_norm):
+                                _all_merge_json_no_unique = False
+                        except Exception:
+                            # Can't determine — assume unique to be safe
+                            _all_merge_json_no_unique = False
+                    else:
+                        # Non-JSON merge (Java, XML etc.) — always treat as unique
+                        _all_merge_json_no_unique = False
                 else:
                     decision = "Merge"  # error → require human/AI review
+                    _all_merge_json_no_unique = False
                 detail = {
                     "file": f.name,
                     "decision": decision,
@@ -410,6 +484,24 @@ def compare_artifact_local(
             file_details.append(detail)
 
     artifact_decision = _artifact_decision(file_decisions)
+
+    # ── No-customer-content note ──────────────────────────────────────────────
+    # If every JSON file that triggered Merge has no AGCO-unique content,
+    # flag the artifact so the engineer can consider removing it from
+    # customer git after upgrade (SYSTEM will provide it directly).
+    # Not applied to BASE-redirect artifacts (different artifact name / purpose).
+    no_customer_content_note: str | None = None
+    if (
+        artifact_decision == "Merge"
+        and _merge_json_count > 0
+        and _all_merge_json_no_unique
+        and base_redirect is None
+    ):
+        no_customer_content_note = (
+            "No customer-specific content detected — after merge this artifact "
+            "will be identical to SYSTEM 26.2. Consider removing from customer "
+            "git after upgrade completes."
+        )
 
     # ── BASE redirect always forces Merge ─────────────────────────────────────
     # When a BASE_*_NAME tag redirected us to a different SYSTEM artifact, the
@@ -445,6 +537,7 @@ def compare_artifact_local(
         "analysis": analysis,
         "engine": "local",
         "base_redirect": base_redirect,
+        "no_customer_content_note": no_customer_content_note,
     }
 
 

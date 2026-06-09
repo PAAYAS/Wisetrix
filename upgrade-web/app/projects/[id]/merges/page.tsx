@@ -501,6 +501,11 @@ export default function MergesPage({ params }: { params: { id: string } }) {
                             ⚠ DB action required before upgrade
                           </div>
                         )}
+                        {rec.no_customer_content && (
+                          <div className="mt-1 inline-flex items-center gap-1 rounded bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+                            ℹ No customer-specific content — consider removing after upgrade
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-2 text-muted-foreground">
                         {rec.files.length}
@@ -579,6 +584,11 @@ function PendingRow({
         {entry.db_warning && (
           <div className="mt-1 inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300">
             ⚠ DB action required before upgrade
+          </div>
+        )}
+        {entry.no_customer_content_note && (
+          <div className="mt-1 inline-flex items-center gap-1 rounded bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+            ℹ No customer-specific content — consider removing after upgrade
           </div>
         )}
       </td>

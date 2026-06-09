@@ -160,6 +160,7 @@ export interface ComparisonResult {
   risk_score?: number;
   decision_note?: string;
   db_warning?: string;
+  no_customer_content_note?: string;
   error?: string;
   decided_at?: string;
 }
@@ -188,6 +189,7 @@ export interface MergeRecord {
   merged_at: string;
   merge_duration_seconds: number | null;
   db_warning?: string | null;
+  no_customer_content?: boolean;
   files: string[];
   explanation: string;
   diff_generated: boolean;

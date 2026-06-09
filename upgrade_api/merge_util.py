@@ -310,6 +310,10 @@ def perform_merge(
         "rel_path": rel,
         "merged_at": datetime.now(timezone.utc).isoformat(),
         "merge_duration_seconds": merge_duration_seconds,
+        # True when the artifact had no customer-specific content at compare time.
+        # Future git automation can use this flag to prompt the engineer before
+        # skipping check-in (take from SYSTEM directly instead).
+        "no_customer_content": bool(entry.get("no_customer_content_note")),
         "files": list(artifact_files.keys()),
         "explanation": explanation,
         "base_redirect": base_redirect,
