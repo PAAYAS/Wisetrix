@@ -143,17 +143,23 @@ def _normalize_for_comparison(obj: object) -> object:
         }
     if isinstance(obj, list):
         normalised = [_normalize_for_comparison(item) for item in obj]
-        # Sort arrays of dicts by their identity key so order doesn't matter
+        # Sort arrays of dicts by their identity key so order doesn't matter.
+        # Only use a key if it is UNIQUE in the array — if RULE_ID has duplicates
+        # (multiple rule instances of the same type), fall through to INSTANCE_ID.
         if normalised and isinstance(normalised[0], dict):
             for id_key in _ARRAY_IDENTITY_KEYS:
-                if any(id_key in item for item in normalised if isinstance(item, dict)):
-                    try:
-                        return sorted(
-                            normalised,
-                            key=lambda x: str(x.get(id_key, "")) if isinstance(x, dict) else str(x),
-                        )
-                    except TypeError:
-                        break
+                if not any(id_key in item for item in normalised if isinstance(item, dict)):
+                    continue
+                values = [item.get(id_key) for item in normalised if isinstance(item, dict)]
+                if len(values) != len({str(v) for v in values}):
+                    continue   # key not unique — try next
+                try:
+                    return sorted(
+                        normalised,
+                        key=lambda x: str(x.get(id_key, "")) if isinstance(x, dict) else str(x),
+                    )
+                except TypeError:
+                    break
         return normalised
     return obj
 
@@ -184,23 +190,29 @@ def _customer_has_unique_content(src: object, tgt: object) -> bool:
 
     if isinstance(src, list) and isinstance(tgt, list):
         if src and isinstance(src[0], dict):
-            # Find the identity key used for this array
+            # Find the first identity key that is UNIQUE in both arrays.
+            # Skip RULE_ID if it appears multiple times (multiple instances of
+            # the same rule type) and fall through to INSTANCE_ID which is unique.
             for id_key in _ARRAY_IDENTITY_KEYS:
-                if any(id_key in item for item in src if isinstance(item, dict)):
-                    tgt_by_id = {
-                        item.get(id_key): item
-                        for item in tgt
-                        if isinstance(item, dict)
-                    }
-                    for src_item in src:
-                        if not isinstance(src_item, dict):
-                            continue
-                        key_val = src_item.get(id_key)
-                        if key_val not in tgt_by_id:
-                            return True   # AGCO has a record SYSTEM doesn't
-                        if _customer_has_unique_content(src_item, tgt_by_id[key_val]):
-                            return True   # same record but AGCO modified it
-                    return False   # all AGCO records exist unchanged in SYSTEM
+                if not any(id_key in item for item in src if isinstance(item, dict)):
+                    continue
+                src_vals = [item.get(id_key) for item in src if isinstance(item, dict)]
+                if len(src_vals) != len({str(v) for v in src_vals}):
+                    continue   # not unique in src — try next key
+                tgt_by_id = {
+                    item.get(id_key): item
+                    for item in tgt
+                    if isinstance(item, dict)
+                }
+                for src_item in src:
+                    if not isinstance(src_item, dict):
+                        continue
+                    key_val = src_item.get(id_key)
+                    if key_val not in tgt_by_id:
+                        return True   # AGCO has a record SYSTEM doesn't
+                    if _customer_has_unique_content(src_item, tgt_by_id[key_val]):
+                        return True   # same record but AGCO modified it
+                return False   # all AGCO records exist unchanged in SYSTEM
         return src != tgt   # plain list — fall back to equality
 
     return src != tgt   # scalar: any difference is unique content
