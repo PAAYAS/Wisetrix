@@ -88,10 +88,93 @@ def _read(path: str) -> str:
         return fh.read()
 
 
+# ---------------------------------------------------------------------------
+# Smart JSON comparison helpers
+# ---------------------------------------------------------------------------
+
+# Fields that carry no functional meaning for comparison purposes.
+# Sequence numbers change whenever rules are inserted/reordered by SYSTEM.
+# Metadata fields (ORG_CODE, dates) are always different between SYSTEM and
+# customer but are NOT customer customisations.
+_COMPARISON_IGNORE_KEYS: frozenset[str] = frozenset({
+    # Sequence / ordering numbers — irrelevant for identity comparison
+    "EXEC_SEQ",
+    "ROW_SEQ",
+    "SET_VALIDATION_ID",
+    # Administrative metadata — always differs between SYSTEM and customer
+    "ORG_CODE",
+    "CREATED_BY",
+    "CREATED_DATE",
+    "LAST_MODIFIED_BY",
+    "LAST_MODIFIED_DATE",
+    "COMPANY_CODE",
+    "RULE_COMPANY_CODE",
+})
+
+# Keys that uniquely identify a record inside an array.
+# When sorting arrays for stable comparison we prefer these in order.
+_ARRAY_IDENTITY_KEYS: tuple[str, ...] = (
+    "RULE_ID",
+    "INSTANCE_ID",
+    "FIELD_ID",
+    "FIELD_NAME",
+    "VALIDATION_ID",
+    "INTERNAL_ID",
+    "COLUMN_NAME",
+    "MENU_ITEM_ID",
+    "OBJECT_ID",
+)
+
+
+def _normalize_for_comparison(obj: object) -> object:
+    """Recursively strip noise fields and sort arrays by identity key.
+
+    This makes the comparison semantic rather than positional:
+      - EXEC_SEQ / ROW_SEQ differences are ignored (sequence numbers only)
+      - ORG_CODE / date metadata are ignored (always differ, never custom)
+      - Arrays of records are sorted by their identity key (RULE_ID etc.)
+        so that insertions/reorderings by SYSTEM don't produce false diffs
+    """
+    if isinstance(obj, dict):
+        return {
+            k: _normalize_for_comparison(v)
+            for k, v in obj.items()
+            if k not in _COMPARISON_IGNORE_KEYS
+        }
+    if isinstance(obj, list):
+        normalised = [_normalize_for_comparison(item) for item in obj]
+        # Sort arrays of dicts by their identity key so order doesn't matter
+        if normalised and isinstance(normalised[0], dict):
+            for id_key in _ARRAY_IDENTITY_KEYS:
+                if any(id_key in item for item in normalised if isinstance(item, dict)):
+                    try:
+                        return sorted(
+                            normalised,
+                            key=lambda x: str(x.get(id_key, "")) if isinstance(x, dict) else str(x),
+                        )
+                    except TypeError:
+                        break
+        return normalised
+    return obj
+
+
 def _compare_json(src: str, tgt: str) -> bool:
-    """Semantic JSON compare — key order irrelevant."""
+    """Semantic JSON compare.
+
+    Ignores:
+      - Key ordering (dicts are unordered)
+      - EXEC_SEQ / ROW_SEQ — sequence numbers that change on insertions
+      - ORG_CODE, dates, CREATED_BY — metadata that always differs
+      - Array element ordering — sorted by identity key (RULE_ID etc.)
+
+    Result: two JSON files are considered IDENTICAL if their functional
+    content is the same even if SYSTEM renumbered rules or metadata differs.
+    This prevents false Merge decisions caused purely by EXEC_SEQ changes.
+    """
     try:
-        return json.loads(src) == json.loads(tgt)
+        src_norm = _normalize_for_comparison(json.loads(src))
+        tgt_norm = _normalize_for_comparison(json.loads(tgt))
+        return src_norm == tgt_norm
     except (json.JSONDecodeError, Exception):
         return src.strip() == tgt.strip()
 
