@@ -81,8 +81,12 @@ Do NOT include file contents in the JSON — they are already on disk under ./me
 - For huge files (>1MB), read in chunks via offset/limit and reason locally.
 - Preserve trailing newlines and exact whitespace where the policy demands it.
 - For JSON: deep-merge by primary key, resequence ROW_SEQ / SET_VALIDATION_ID where required.
-- For Java/JS/JSP: dedupe class-level methods, never dedupe inside anonymous inner
-  classes, keep imports consistent with usage.
+- For Java/JS/JSP: when a method exists in both customer and SYSTEM with the same
+  signature but DIFFERENT bodies, do NOT just keep SYSTEM's method — merge the body
+  statement-by-statement against the baseline so the customer's added statements AND
+  SYSTEM's new statements are BOTH preserved. Only dedupe a method when both bodies are
+  functionally identical. Never dedupe inside anonymous inner classes. Keep imports
+  consistent with usage.
 - Do NOT write MERGE_REPORT.md, MERGE_SUMMARY.txt, VERIFICATION_CHECKLIST.txt or any
   analysis/documentation files. Write ONLY the actual merged artifact files to ./merged/.
 """

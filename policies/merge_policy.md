@@ -98,19 +98,34 @@ Does NOT apply to `BASE_*_NAME` redirect artifacts (they are custom extensions o
 
 ## 4. 3-Way Code Merge (when baseline is available)
 
-For code files (Java / JS / JSP), use baseline (24.4.11) as the common ancestor:
+For code files (Java / JS / JSP), use the baseline as the common ancestor.
 
-| SYSTEM vs Baseline | ALDI vs Baseline | Winner |
+**Apply the 3-way comparison at the SMALLEST meaningful granularity** — not the whole file, and not the whole method. A method is NOT an atomic unit: when a method's body changed on both sides, descend into it and merge **statement by statement**.
+
+| SYSTEM vs Baseline | Customer vs Baseline | Winner |
 |---------------------|------------------|--------|
 | Changed | Unchanged | **SYSTEM wins** (adopt upgrade) |
-| Unchanged | Changed | **ALDI wins** (preserve customization) |
-| Changed | Changed (same region) | **SYSTEM wins** (upgrade takes priority, flag for review) |
-| Changed | Changed (different regions) | **Merge both** (combine changes) |
+| Unchanged | Changed | **Customer wins** (preserve customization) |
+| Changed | Changed (same statement/line) | **SYSTEM wins** (upgrade takes priority, flag for review) |
+| Changed | Changed (different statements/regions) | **Merge both** (keep SYSTEM's new statements AND the customer's added statements) |
 | Unchanged | Unchanged | Keep baseline |
 
-### Special Code Rules
-- **Imports**: union of SYSTEM + ALDI imports, then prune to only those actually used in the merged file.
-- **No duplicate methods**: if a method with the same signature exists at class level in both, keep SYSTEM's version unless ALDI version has meaningful customization (different body).
+### Method-body merge (CRITICAL — do not pick a whole method)
+When a method with the same signature exists in both customer and SYSTEM but the bodies differ:
+- Do **NOT** simply "keep SYSTEM's version". That silently drops the customer's customizations inside the method.
+- Diff each body against the **baseline** method body.
+  - Statements SYSTEM added since baseline → keep them.
+  - Statements the customer added since baseline (e.g. an extra call like `submitWorkToCMG(theUserId, theRDC);`) → keep them too.
+  - Statements the customer **removed** since baseline (present in baseline, absent in the customer body) → keep them removed. A customer deletion is intentional and must NOT be re-introduced from SYSTEM, unless SYSTEM itself modified that exact statement (true conflict → SYSTEM wins, flag for review).
+  - Statements SYSTEM **removed** since baseline → drop them, unless the customer modified that exact statement (then keep the customer's version).
+  - The merged method body contains **both** sets of changes, in a sensible order (customer's added leading statements first, then SYSTEM's existing/new body, unless ordering is functionally significant).
+- Only when a method exists in SYSTEM and is **byte-identical** to the customer's (or the customer never touched it relative to baseline) do you take SYSTEM's as-is.
+
+> Worked example (`afterEntitySave`): baseline has a method body; **SYSTEM 26.2 prepends a new line** `submitWorkToCMG(theUserId, theRDC);`; the **customer rewrote the rest of the body** with their own logic (e.g. `if (generateOutBound) { submitWorktoQueue(...); } generateOutBound = false;`). The correct merge keeps **both**: SYSTEM's new `submitWorkToCMG(...)` call AND the customer's rewritten body. Taking only the customer's body (dropping SYSTEM's new line) is WRONG; taking only SYSTEM's body (dropping the customer's logic) is also WRONG.
+
+### Other Special Code Rules
+- **Imports**: union of SYSTEM + customer imports, then prune to only those actually used in the merged file.
+- **True duplicate methods only**: dedupe a method only when both bodies are functionally identical — keep one copy. Differing bodies are a body-merge (above), never a drop.
 - **Anonymous inner classes**: treat methods inside `new X() { ... }` as part of the outer expression, NOT as class-level duplicates.
 
 ---
