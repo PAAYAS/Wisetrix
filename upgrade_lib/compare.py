@@ -343,6 +343,39 @@ def _is_retain_category(rel_path: str) -> bool:
     return any(p in RETAIN_CATEGORIES for p in parts)
 
 
+def _system_unchanged_from_baseline(tgt_artifact: Path, baseline_artifact: Path) -> bool:
+    """True if the SYSTEM artifact is identical to its baseline counterpart.
+
+    When SYSTEM 26.2 == baseline 24.2.x for an artifact, the upgrade introduced
+    NO change to it — so any customer difference is pure customization and the
+    artifact must be Retained as-is, not merged (the GTM expert's rule 1.1).
+
+    Requires both dirs to exist, the same set of comparable files, and every
+    file identical (semantic compare). Returns False if SYSTEM has no baseline
+    counterpart (i.e. SYSTEM added the artifact in this release).
+    """
+    if not tgt_artifact.is_dir() or not baseline_artifact.is_dir():
+        return False
+
+    def _comparable(d: Path) -> dict[str, Path]:
+        return {
+            f.name: f
+            for f in d.iterdir()
+            if f.is_file()
+            and f.name not in EXCLUDE_NAMES
+            and f.suffix.lower() in INCLUDE_EXTS
+        }
+
+    sys_files = _comparable(tgt_artifact)
+    base_files = _comparable(baseline_artifact)
+    if not sys_files or set(sys_files) != set(base_files):
+        return False
+    for name, sf in sys_files.items():
+        if _compare_files(str(sf), str(base_files[name])) != "identical":
+            return False
+    return True
+
+
 def _artifact_decision(file_decisions: dict) -> str:
     """
     Roll up per-file decisions to an artifact-level decision.
@@ -369,6 +402,7 @@ def compare_artifact_local(
     tgt_artifact: Path,
     rel_path: str,
     target_root: Path | None = None,
+    baseline_root: Path | None = None,
 ) -> dict:
     """
     Local, deterministic compare. Same shape as the Claude-based result so
@@ -510,6 +544,29 @@ def compare_artifact_local(
 
     artifact_decision = _artifact_decision(file_decisions)
 
+    # ── Expert rule 1.1: SYSTEM unchanged from baseline → Retain ──────────────
+    # The per-file decision above is 2-way (customer vs SYSTEM). But if SYSTEM
+    # 26.2 is identical to the baseline for this artifact, the upgrade changed
+    # nothing here — so a "Merge" is wrong: the customer's differences are pure
+    # customization and there is nothing from SYSTEM to merge in. Retain as-is.
+    # Only when a baseline is available; skipped for BASE-redirect artifacts.
+    baseline_unchanged_note: str | None = None
+    if (
+        artifact_decision == "Merge"
+        and base_redirect is None
+        and target_exists
+        and baseline_root is not None
+        and _system_unchanged_from_baseline(
+            tgt_artifact, Path(baseline_root) / rel_path
+        )
+    ):
+        artifact_decision = "Retain"
+        baseline_unchanged_note = (
+            "SYSTEM 26.2 is identical to the baseline for this artifact — the "
+            "upgrade introduced no change, so the customer customization is "
+            "retained as-is (no merge needed)."
+        )
+
     # ── No-customer-content → Remove (backport scenario) ──────────────────────
     # If every JSON file that triggered Merge has no customer-unique content,
     # the customer artifact is a pure subset of SYSTEM 26.2 — merging would
@@ -555,6 +612,8 @@ def compare_artifact_local(
         analysis += "  Target artifact does not exist — source-only."
     if base_redirect is not None and target_exists:
         analysis += f"  BASE redirect → {base_redirect} — always Merge."
+    if baseline_unchanged_note:
+        analysis += "  SYSTEM unchanged from baseline — Retain (no merge needed)."
 
     return {
         "decision": artifact_decision,
@@ -567,6 +626,7 @@ def compare_artifact_local(
         "engine": "local",
         "base_redirect": base_redirect,
         "no_customer_content_note": no_customer_content_note,
+        "baseline_unchanged_note": baseline_unchanged_note,
     }
 
 
