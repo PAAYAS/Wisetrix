@@ -313,6 +313,9 @@ export interface DbScanResponse {
   resolve_error?: string | null;
   actions: DbAction[];
   scanned_at?: string;
+  app_fingerprint?: string;
+  stale?: boolean;
+  pending_app_merges?: number;
 }
 
 export interface DbTabResult {
@@ -341,6 +344,8 @@ export interface DbStatus {
   enabled: boolean;
   app_scanned: boolean;
   has_actions: boolean;
+  stale?: boolean;
+  pending_app_merges?: number;
 }
 
 /** ticket_key → "git" | "keyword" for every artifact that has a match */

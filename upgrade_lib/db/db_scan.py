@@ -13,6 +13,8 @@ performed by upgrade_lib.db.xlsx_merge when a Merge action is executed.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,43 @@ from upgrade_lib.db.paths import find_bppol_file
 
 # The app category whose data also lives in the DB seed-data repo.
 DB_CATEGORY = "bizpolicydefs"
+
+
+def app_fingerprint(
+    comparison: dict[str, Any], merge_report: dict[str, Any] | None = None
+) -> str:
+    """Fingerprint the app state the DB view depends on.
+
+    DB actions are derived from a snapshot of the app's bizpolicydefs decisions
+    and their merged outputs. If either changes (a re-scan flips a decision, or
+    a policy is re-merged), this fingerprint changes — so a DB scan stamped with
+    an old fingerprint can be detected as STALE and the user prompted to re-scan
+    before reconciling. Only bizpolicydefs affect the DB step.
+    """
+    merge_report = merge_report or {}
+    relevant: dict[str, Any] = {}
+    for key, entry in comparison.items():
+        if entry.get("category") != DB_CATEGORY:
+            continue
+        relevant[key] = {
+            "decision": entry.get("decision"),
+            "merged_at": (merge_report.get(key) or {}).get("merged_at"),
+        }
+    return hashlib.sha256(json.dumps(relevant, sort_keys=True).encode()).hexdigest()
+
+
+def pending_app_merges(
+    comparison: dict[str, Any], merge_report: dict[str, Any] | None = None
+) -> list[str]:
+    """bizpolicydefs with a Merge decision not yet merged on the app side."""
+    merge_report = merge_report or {}
+    return [
+        key
+        for key, entry in comparison.items()
+        if entry.get("category") == DB_CATEGORY
+        and entry.get("decision") == "Merge"
+        and key not in merge_report
+    ]
 
 
 def _action_for_decision(decision: str, workbook_name: str | None) -> tuple[str, str]:

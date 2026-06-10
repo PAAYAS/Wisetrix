@@ -42,7 +42,11 @@ from upgrade_api.paths import (
 )
 from upgrade_api.scan_util import resolve_db_source_root
 from upgrade_api.state import load_projects
-from upgrade_lib.db.db_scan import derive_db_actions
+from upgrade_lib.db.db_scan import (
+    app_fingerprint,
+    derive_db_actions,
+    pending_app_merges,
+)
 from upgrade_lib.db.paths import find_bppol_file
 from upgrade_lib.db.xlsx_merge import merge_policy_into_workbook
 
@@ -85,6 +89,22 @@ def _require_app_scan(project_id: str) -> dict:
     return comp
 
 
+def _require_fresh_scan(project_id: str, comp: dict, merge_report: dict) -> None:
+    """Block a reconcile if no DB scan exists, or if the app state changed
+    since the DB scan was taken (decisions flipped / a policy re-merged).
+    Forces the DB view to reflect the FINAL app state."""
+    payload = load_json(db_comparison_path(project_id), None)
+    if not payload:
+        raise HTTPException(400, "Run DB scan first.")
+    current = app_fingerprint(comp, merge_report)
+    if payload.get("app_fingerprint") != current:
+        raise HTTPException(
+            409,
+            "DB scan is stale — the app comparison or a bizpolicydefs merge "
+            "changed since the last DB scan. Re-scan DB before reconciling.",
+        )
+
+
 # --------------------------------------------------------------------------- #
 # Status & scan
 # --------------------------------------------------------------------------- #
@@ -93,10 +113,17 @@ def _require_app_scan(project_id: str) -> dict:
 def db_status(project_id: str) -> dict:
     project = _project_or_404(project_id)
     comp = load_json(comparison_path(project_id), {})
+    merge_report = load_json(merge_report_path(project_id), {})
+    payload = load_json(db_comparison_path(project_id), None)
+    stale = bool(
+        payload and payload.get("app_fingerprint") != app_fingerprint(comp, merge_report)
+    )
     return {
         "enabled": bool(project.get("db_enabled")),
         "app_scanned": bool(comp),
-        "has_actions": db_comparison_path(project_id).exists(),
+        "has_actions": bool(payload),
+        "stale": stale,
+        "pending_app_merges": len(pending_app_merges(comp, merge_report)),
     }
 
 
@@ -121,15 +148,29 @@ async def db_scan(project_id: str) -> dict:
         "resolve_error": resolve_error,
         "actions": actions,
         "scanned_at": datetime.now(timezone.utc).isoformat(),
+        # Stamp the app state this scan reflects, so later app changes can be
+        # detected as staleness.
+        "app_fingerprint": app_fingerprint(comp, merge_report),
+        "pending_app_merges": len(pending_app_merges(comp, merge_report)),
     }
     save_json(db_comparison_path(project_id), payload)
+    payload["stale"] = False
     return payload
 
 
 @router.get("/scan")
 def db_scan_get(project_id: str) -> dict:
     _project_or_404(project_id)
-    return load_json(db_comparison_path(project_id), {"actions": []})
+    payload = load_json(db_comparison_path(project_id), {"actions": []})
+    # Recompute staleness against the current app state on every read.
+    comp = load_json(comparison_path(project_id), {})
+    merge_report = load_json(merge_report_path(project_id), {})
+    payload["stale"] = bool(
+        payload.get("app_fingerprint")
+        and payload["app_fingerprint"] != app_fingerprint(comp, merge_report)
+    )
+    payload["pending_app_merges"] = len(pending_app_merges(comp, merge_report))
+    return payload
 
 
 # --------------------------------------------------------------------------- #
@@ -195,6 +236,8 @@ def _reconcile_one(
 async def db_merge_one(project_id: str, key: str) -> dict:
     project = _project_or_404(project_id)
     comp = _require_app_scan(project_id)
+    merge_report = load_json(merge_report_path(project_id), {})
+    _require_fresh_scan(project_id, comp, merge_report)
     db_res = await anyio.to_thread.run_sync(
         lambda: resolve_db_source_root(project, skip_pull=True)
     )
@@ -214,6 +257,7 @@ async def db_merge_all(project_id: str) -> dict:
     project = _project_or_404(project_id)
     comp = _require_app_scan(project_id)
     merge_report = load_json(merge_report_path(project_id), {})
+    _require_fresh_scan(project_id, comp, merge_report)
     db_res = await anyio.to_thread.run_sync(
         lambda: resolve_db_source_root(project, skip_pull=True)
     )

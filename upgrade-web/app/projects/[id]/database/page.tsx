@@ -123,6 +123,8 @@ export default function DatabasePage({ params }: { params: { id: string } }) {
   const actions = scan?.actions ?? [];
   const mergeActions = actions.filter((a) => a.action_type === "merge");
   const readyCount = mergeActions.filter((a) => a.ready).length;
+  const stale = !!scan?.stale;
+  const pending = scan?.pending_app_merges ?? 0;
 
   if (loading) {
     return (
@@ -179,7 +181,7 @@ export default function DatabasePage({ params }: { params: { id: string } }) {
             <Button
               variant="outline"
               onClick={mergeAll}
-              disabled={mergingAll || readyCount === 0}
+              disabled={mergingAll || readyCount === 0 || stale}
             >
               {mergingAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               Reconcile all ready ({readyCount})
@@ -192,6 +194,26 @@ export default function DatabasePage({ params }: { params: { id: string } }) {
               </a>
             )}
           </div>
+
+          {stale && (
+            <Card className="border-amber-300 dark:border-amber-800">
+              <CardContent className="py-3 text-sm text-amber-700 dark:text-amber-400">
+                ⚠ The app comparison or a bizpolicydefs merge changed since this DB
+                scan — the actions below may be out of date. Click <strong>Re-scan DB</strong> before reconciling.
+              </CardContent>
+            </Card>
+          )}
+
+          {pending > 0 && (
+            <Card>
+              <CardContent className="py-3 text-sm text-muted-foreground">
+                ℹ {pending} bizpolicydef(s) with a Merge decision haven&apos;t been merged on the
+                app side yet — finish those{" "}
+                <Link className="underline" href={`/projects/${encodeURIComponent(id)}/merges`}>app merges</Link>{" "}
+                to reconcile them here.
+              </CardContent>
+            </Card>
+          )}
 
           {scan?.resolve_error && (
             <Card>
@@ -274,14 +296,16 @@ export default function DatabasePage({ params }: { params: { id: string } }) {
                                 <Button
                                   size="sm"
                                   variant={rec ? "ghost" : "default"}
-                                  disabled={busyKey === a.key || !a.ready}
+                                  disabled={busyKey === a.key || !a.ready || stale}
                                   onClick={() => mergeOne(a.key)}
                                   title={
-                                    a.ready
-                                      ? ""
-                                      : !a.app_merged
-                                        ? "Run the app Merge for this policy first"
-                                        : "bppol workbook not found in DB repo"
+                                    stale
+                                      ? "Re-scan DB first — app data changed"
+                                      : a.ready
+                                        ? ""
+                                        : !a.app_merged
+                                          ? "Run the app Merge for this policy first"
+                                          : "bppol workbook not found in DB repo"
                                   }
                                 >
                                   {busyKey === a.key ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
