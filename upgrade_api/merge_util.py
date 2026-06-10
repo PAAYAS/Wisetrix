@@ -256,6 +256,36 @@ def perform_merge(
         quality_result = qr.to_dict()
         emit("quality_done", key=key, verdict=qr.verdict)
 
+    # ── Deterministic safety net: detect dropped pure-additions ─────────────
+    # Catches the case where the LLM merge silently lost a line that one side
+    # genuinely added (e.g. SYSTEM's new submitWorkToCMG call, or a customer
+    # customization). Non-blocking, but surfaces as WARN findings so the
+    # engineer sees it instead of shipping a wrong merge.
+    dropped: list[dict] = []
+    try:
+        from upgrade_lib.quality.customization_guard import detect_dropped_additions
+
+        dropped = detect_dropped_additions(
+            customer_files, system_files, baseline_files, artifact_files
+        )
+    except Exception as exc:  # noqa: BLE001 — never let the guard break a merge
+        _log.warning("[merge] customization guard failed for %s: %s", key, exc)
+    if dropped:
+        emit("customization_warning", key=key, count=len(dropped))
+        if quality_result is None:
+            quality_result = {"verdict": "WARN", "findings": [], "blocking": False}
+        findings = quality_result.setdefault("findings", [])
+        for d in dropped:
+            findings.append({
+                "severity": "WARNING",
+                "category": "dropped_addition",
+                "file": d["file"],
+                "line": None,
+                "message": d["message"],
+            })
+        if quality_result.get("verdict") == "PASS":
+            quality_result["verdict"] = "WARN"
+
     diff_info = None
     diff_error: str | None = None
     customer_has_diff = any(
@@ -322,4 +352,5 @@ def perform_merge(
         "diff_error": diff_error,
         "out_dir": str(out_dir),
         "quality_result": quality_result,
+        "dropped_additions": dropped,
     }
