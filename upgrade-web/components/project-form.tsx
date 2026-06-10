@@ -124,6 +124,7 @@ export function ProjectForm({ mode, initialId, initialConfig }: ProjectFormProps
       <SourceSection config={config} update={update} />
       <TargetSection config={config} update={update} />
       <BaselineSection config={config} update={update} />
+      <DatabaseSection config={config} update={update} />
       <MiscSection config={config} update={update} />
 
       <div className="flex items-center justify-between gap-3">
@@ -406,6 +407,112 @@ function BaselineSection({ config, update }: SectionProps) {
             value={config.baseline_system ?? ""}
             onChange={(v) => update("baseline_system", v)}
           />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function DatabaseSection({ config, update }: SectionProps) {
+  const [testing, setTesting] = React.useState(false);
+  const enabled = !!config.db_enabled;
+  const dbType = config.db_source_type ?? "git";
+
+  const testGit = async () => {
+    if (!config.db_git_url) {
+      toast.error("Enter a DB Git URL first");
+      return;
+    }
+    setTesting(true);
+    try {
+      const r = await api.testGit(config.db_git_url);
+      if (r.success) toast.success(r.message);
+      else toast.error(r.message);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : (e as Error).message;
+      toast.error(msg);
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Database (seed data)</CardTitle>
+        <CardDescription>
+          Optional. The customer&apos;s <code>*_db</code> seed-data repo holding
+          the <code>bppol.*.xlsx</code> workbooks for bizpolicydefs. Runs after
+          the app upgrade — the app decision drives the DB action.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="h-4 w-4"
+            checked={enabled}
+            onChange={(e) => update("db_enabled", e.target.checked)}
+          />
+          Enable database handling
+        </label>
+
+        {enabled && (
+          <>
+            <RadioGroup
+              value={dbType}
+              onValueChange={(v) => update("db_source_type", v as SourceType)}
+            >
+              <RadioRow value="git" label="Git repository" />
+              <RadioRow value="local" label="Local path" />
+            </RadioGroup>
+
+            {dbType === "git" ? (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field
+                  className="sm:col-span-2"
+                  label="DB Git URL"
+                  placeholder="https://git.dev.e2open.com/scm/ser/agco_db.git"
+                  value={config.db_git_url ?? ""}
+                  onChange={(v) => update("db_git_url", v)}
+                />
+                <Field
+                  label="Branch"
+                  placeholder="main"
+                  value={config.db_git_branch ?? ""}
+                  onChange={(v) => update("db_git_branch", v)}
+                />
+                <Field
+                  label="DB subpath (leave blank to auto-derive)"
+                  placeholder="src/main/resources/seed_data_src/workspace/packages/<project>_seed_data/data"
+                  value={config.db_source_subpath ?? ""}
+                  onChange={(v) => update("db_source_subpath", v)}
+                />
+                <div className="sm:col-span-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={testGit}
+                    disabled={testing}
+                  >
+                    {testing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Plug className="h-4 w-4" />
+                    )}
+                    Test DB Git connection
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Field
+                label="DB source root (local path to .../data)"
+                placeholder="C:/path/to/agco_db/.../agco_seed_data/data"
+                value={config.db_source_root ?? ""}
+                onChange={(v) => update("db_source_root", v)}
+              />
+            )}
+          </>
         )}
       </CardContent>
     </Card>

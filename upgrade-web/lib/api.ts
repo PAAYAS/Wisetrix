@@ -106,6 +106,15 @@ export interface ProjectConfig {
   // misc
   merge_output_dir?: string | null;
   jira_project_url?: string | null;
+
+  // database (seed-data) — optional, downstream of the app upgrade
+  db_enabled?: boolean | null;
+  db_source_type?: SourceType | null;
+  db_git_url?: string | null;
+  db_git_branch?: string | null;
+  db_source_subpath?: string | null;
+  db_source_root?: string | null;
+  db_output_dir?: string | null;
 }
 
 export interface ProjectSummary {
@@ -278,6 +287,60 @@ export interface JiraTestResponse {
   success: boolean;
   message: string;
   user?: string | null;
+}
+
+// --- Database (seed-data) ---
+export type DbActionType = "remove" | "remove_absent" | "retain" | "merge" | "skip";
+
+export interface DbAction {
+  key: string;
+  bucket: string;
+  name: string;
+  rel_path: string;
+  app_decision: Decision;
+  action_type: DbActionType;
+  message: string;
+  workbook_name: string;
+  bppol_path: string;
+  bppol_exists: boolean;
+  app_merged: boolean;
+  ready: boolean;
+  status: string;
+}
+
+export interface DbScanResponse {
+  db_source_root?: string;
+  resolve_error?: string | null;
+  actions: DbAction[];
+  scanned_at?: string;
+}
+
+export interface DbTabResult {
+  sheet: string;
+  json_key: string;
+  identity_cols: string[];
+  matched: number;
+  added: number;
+  added_alt_keys: Record<string, number[]>;
+}
+
+export interface DbMergeRecord {
+  key: string;
+  bucket: string;
+  name: string;
+  rel_path: string;
+  merged_at: string;
+  source_xlsx: string;
+  output_xlsx: string;
+  total_added: number;
+  tabs: DbTabResult[];
+  warnings: string[];
+}
+
+export interface DbStatus {
+  enabled: boolean;
+  app_scanned: boolean;
+  has_actions: boolean;
 }
 
 /** ticket_key → "git" | "keyword" for every artifact that has a match */
@@ -478,6 +541,34 @@ export const api = {
       `/projects/${encodeURIComponent(id)}/jira/finalize`,
       { method: "POST" },
     ),
+
+  // Database (seed-data)
+  dbStatus: (id: string) =>
+    request<DbStatus>(`/projects/${encodeURIComponent(id)}/db/status`),
+  dbScanGet: (id: string) =>
+    request<DbScanResponse>(`/projects/${encodeURIComponent(id)}/db/scan`),
+  dbScan: (id: string) =>
+    requestDirect<DbScanResponse>(`/projects/${encodeURIComponent(id)}/db/scan`, {
+      method: "POST",
+    }),
+  dbMerges: (id: string) =>
+    request<{ done: Record<string, DbMergeRecord> }>(
+      `/projects/${encodeURIComponent(id)}/db/merges`,
+    ),
+  dbMergeOne: (id: string, key: string) =>
+    requestDirect<DbMergeRecord>(
+      `/projects/${encodeURIComponent(id)}/db/merges/${encodeURIComponent(key)}`,
+      { method: "POST" },
+    ),
+  dbMergeAll: (id: string) =>
+    requestDirect<{ merged: string[]; failed: { key: string; error: string }[]; total: number }>(
+      `/projects/${encodeURIComponent(id)}/db/merges`,
+      { method: "POST" },
+    ),
+  dbDownloadOneUrl: (id: string, key: string) =>
+    `/api/projects/${encodeURIComponent(id)}/db/merges/${encodeURIComponent(key)}/download`,
+  dbDownloadAllUrl: (id: string) =>
+    `/api/projects/${encodeURIComponent(id)}/db/download`,
 
   // Provider tests
   testGit: (url: string) =>

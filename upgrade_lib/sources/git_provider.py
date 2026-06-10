@@ -257,6 +257,97 @@ class GitProvider(SourceProvider):
             },
         )
 
+    def clone_subpath(
+        self,
+        git_url: str,
+        branch: str = "main",
+        subpath: str = "",
+        *,
+        skip_pull: bool = False,
+    ) -> dict:
+        """Clone (or update) a repo and return its on-disk paths.
+
+        Unlike :meth:`resolve`, this does NOT require any target/baseline
+        config — it is used for standalone repos such as the customer's
+        ``*_db`` seed-data repo, which has no SYSTEM counterpart.
+
+        Returns a dict: {clone_dir, source_root, commit, branch, git_url}.
+        Reuses the same cache root and clone/pull strategy as resolve().
+        """
+        if gitpython is None:
+            raise ImportError(
+                "gitpython is required for Git integration. "
+                "Install it with: pip install gitpython"
+            )
+        if not git_url:
+            raise ValueError("git_url is required")
+
+        branch = branch or "main"
+        clone_dir = _CACHE_ROOT / _repo_hash(git_url)
+        clone_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        if skip_pull and clone_dir.exists() and (clone_dir / ".git").exists():
+            try:
+                repo = gitpython.Repo(clone_dir)
+                commit_hash = repo.head.commit.hexsha
+                source_root = clone_dir / subpath if subpath else clone_dir
+                if source_root.exists():
+                    return {
+                        "clone_dir": str(clone_dir),
+                        "source_root": str(source_root),
+                        "commit": commit_hash,
+                        "branch": branch,
+                        "git_url": git_url,
+                        "skipped_pull": True,
+                    }
+            except Exception as e:
+                logger.warning(
+                    "clone_subpath skip_pull fast-path failed (%s); full clone",
+                    e,
+                )
+
+        with _cache_lock(clone_dir):
+            if clone_dir.exists() and (clone_dir / ".git").exists():
+                logger.info("Updating %s (branch: %s)", git_url, branch)
+                repo = gitpython.Repo(clone_dir)
+                repo.git.fetch(
+                    "origin",
+                    f"refs/heads/{branch}:refs/remotes/origin/{branch}",
+                    "--no-tags",
+                    "--depth=1",
+                )
+                try:
+                    repo.git.checkout(branch)
+                except Exception:
+                    repo.git.checkout("-B", branch, f"origin/{branch}")
+                repo.git.reset("--hard", f"origin/{branch}")
+            else:
+                logger.info("Cloning %s (branch: %s, shallow depth=1)", git_url, branch)
+                repo = gitpython.Repo.clone_from(
+                    git_url,
+                    str(clone_dir),
+                    branch=branch,
+                    single_branch=True,
+                    no_tags=True,
+                    depth=1,
+                )
+            commit_hash = repo.head.commit.hexsha
+
+        source_root = clone_dir / subpath if subpath else clone_dir
+        if not source_root.exists():
+            raise ValueError(
+                f"DB source subpath not found after clone: {source_root}\n"
+                f"Check 'db_source_subpath' in your project config."
+            )
+
+        return {
+            "clone_dir": str(clone_dir),
+            "source_root": str(source_root),
+            "commit": commit_hash,
+            "branch": branch,
+            "git_url": git_url,
+        }
+
     def validate(self, config: dict) -> list[str]:
         errors = []
         if not config.get("git_url"):
@@ -266,33 +357,26 @@ class GitProvider(SourceProvider):
         return errors
 
     def list_branches(self, git_url: str) -> list[str]:
-        """List remote branches for a git URL (for UI branch selector)."""
+        """List remote branches for a git URL (for UI branch selector / test).
+
+        Uses `git ls-remote --heads` — a single lightweight network call that
+        reads the remote refs WITHOUT cloning. This keeps the "Test connection"
+        action fast even for large repos (the previous implementation cloned
+        every branch tip, which was slow on big repos like *_db).
+        """
         if gitpython is None:
             raise ImportError("gitpython is required")
 
-        clone_dir = _CACHE_ROOT / _repo_hash(git_url)
-
-        with _cache_lock(clone_dir):
-            if clone_dir.exists() and (clone_dir / ".git").exists():
-                repo = gitpython.Repo(clone_dir)
-                # --depth=1 keeps the shallow clone up-to-date without
-                # downloading history
-                repo.git.fetch("--all", "--prune", "--depth=1")
-            else:
-                # No --single-branch so all remote refs are visible, but
-                # --depth=1 means we only download the tip commit per branch.
-                repo = gitpython.Repo.clone_from(
-                    git_url,
-                    str(clone_dir),
-                    no_tags=True,
-                    depth=1,
-                )
-
-        branches = []
-        for ref in repo.references:
-            name = str(ref)
-            if name.startswith("origin/") and not name.endswith("/HEAD"):
-                branches.append(name.replace("origin/", "", 1))
+        # ls-remote needs no working tree — run it standalone.
+        raw = gitpython.cmd.Git().ls_remote("--heads", git_url)
+        branches: list[str] = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if "\t" not in line:
+                continue
+            ref = line.split("\t", 1)[1]
+            if ref.startswith("refs/heads/"):
+                branches.append(ref[len("refs/heads/"):])
         return sorted(set(branches))
 
     @staticmethod

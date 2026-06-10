@@ -109,6 +109,14 @@ _CACHE_KEYS = (
     "baseline_version",
     "baseline_system",
     "merge_output_dir",
+    # DB (seed-data) source
+    "db_enabled",
+    "db_source_type",
+    "db_git_url",
+    "db_git_branch",
+    "db_source_subpath",
+    "db_source_root",
+    "db_output_dir",
 )
 
 
@@ -124,6 +132,45 @@ def invalidate_resolve_cache(project: dict[str, Any] | None = None) -> None:
             _RESOLVE_CACHE.clear()
         else:
             _RESOLVE_CACHE.pop(_project_cache_key(project), None)
+
+
+def resolve_db_source_root(
+    project: dict[str, Any],
+    *,
+    skip_pull: bool = True,
+) -> dict[str, Any]:
+    """Resolve ONLY the DB seed-data source root (clones the *_db repo).
+
+    Independent of the app source/target/baseline so the DB tab never triggers
+    an Artifactory download. Returns {db_source_root, [error]}.
+    """
+    out: dict[str, Any] = {"db_source_root": ""}
+    if not project.get("db_enabled"):
+        return out
+    db_type = project.get("db_source_type") or "git"
+    try:
+        if db_type == "git" and project.get("db_git_url"):
+            from upgrade_lib.db.paths import (
+                db_subpath_default,
+                project_token_from_db_url,
+            )
+
+            subpath = project.get("db_source_subpath") or db_subpath_default(
+                project_token_from_db_url(project["db_git_url"])
+            )
+            gp = GitProvider()
+            db_res = gp.clone_subpath(
+                project["db_git_url"],
+                branch=project.get("db_git_branch") or "main",
+                subpath=subpath,
+                skip_pull=skip_pull,
+            )
+            out["db_source_root"] = db_res["source_root"]
+        elif db_type == "local":
+            out["db_source_root"] = project.get("db_source_root", "")
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)
+    return out
 
 
 def resolve_project_paths(
@@ -202,6 +249,14 @@ def resolve_project_paths(
     resolved["merge_output_dir"] = project.get(
         "merge_output_dir", ""
     )
+
+    # ── DB (seed-data) source — optional, additive ──────────────────────────
+    # Resolved independently of the app source/target/baseline. Never raises:
+    # DB failures must not break the app scan/merge flow.
+    db_out = resolve_db_source_root(project, skip_pull=skip_pull)
+    resolved["db_source_root"] = db_out.get("db_source_root", "")
+    if db_out.get("error"):
+        resolved["_db_error"] = db_out["error"]
 
     with _RESOLVE_CACHE_LOCK:
         _RESOLVE_CACHE[cache_key] = (now, dict(resolved))

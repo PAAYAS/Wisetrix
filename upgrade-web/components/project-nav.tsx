@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Database,
   FileText,
   GitCompare,
   GitMerge,
@@ -42,6 +43,12 @@ const TABS: Tab[] = [
     label: "Diff & Review",
     match: "diff",
     icon: GitCompare,
+  },
+  {
+    href: (id) => `/projects/${encodeURIComponent(id)}/database`,
+    label: "Database",
+    match: "database",
+    icon: Database,
   },
   {
     href: (id) => `/projects/${encodeURIComponent(id)}/jira`,
