@@ -82,6 +82,15 @@ Affected category:
 
 This cannot be automated — the engineer must perform this step manually after merge and before deployment.
 
+### Rule 8 — No customer-specific content → Remove (backport scenario)
+If an artifact would otherwise be **Merge**, but the customer version contains **no content that SYSTEM 26.2 does not already have** (the customer artifact is a pure subset of SYSTEM after ignoring noise fields like EXEC_SEQ / ROW_SEQ / metadata), then **Remove** it.
+
+This is the backport scenario: a fix was backported from the target version into the current project, so the customer copy carries no project-specific customization. The artifact must be taken directly from the 26.2 core instead of merging.
+
+Example (AGCO): `bizpolicydefs` were backported from 26.2 into the 24.2 project with no AGCO-specific customization → **Remove**.
+
+Does NOT apply to `BASE_*_NAME` redirect artifacts (they are custom extensions of a SYSTEM base — always Merge).
+
 ### Rule 7 — DGS artifacts always Retain
 `dgs/` category artifacts (Document Generation System) are **not migrated** through this tool. Decision is always **Retain** — they are kept as-is without comparison against SYSTEM.
 

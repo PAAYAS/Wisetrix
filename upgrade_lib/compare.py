@@ -510,10 +510,13 @@ def compare_artifact_local(
 
     artifact_decision = _artifact_decision(file_decisions)
 
-    # ── No-customer-content note ──────────────────────────────────────────────
-    # If every JSON file that triggered Merge has no AGCO-unique content,
-    # flag the artifact so the engineer can consider removing it from
-    # customer git after upgrade (SYSTEM will provide it directly).
+    # ── No-customer-content → Remove (backport scenario) ──────────────────────
+    # If every JSON file that triggered Merge has no customer-unique content,
+    # the customer artifact is a pure subset of SYSTEM 26.2 — merging would
+    # produce a result identical to SYSTEM.  This is the backport scenario:
+    # e.g. AGCO bizpolicydefs were backported from 26.2 into the 24.2 project
+    # with no AGCO-specific customisation, so the artifact must be REMOVED and
+    # taken directly from the 26.2 core.
     # Not applied to BASE-redirect artifacts (different artifact name / purpose).
     no_customer_content_note: str | None = None
     if (
@@ -522,10 +525,11 @@ def compare_artifact_local(
         and _all_merge_json_no_unique
         and base_redirect is None
     ):
+        artifact_decision = "Remove"
         no_customer_content_note = (
-            "No customer-specific content detected — after merge this artifact "
-            "will be identical to SYSTEM 26.2. Consider removing from customer "
-            "git after upgrade completes."
+            "No customer-specific content detected — the customer artifact is a "
+            "subset of SYSTEM 26.2 (backport scenario). Removed so the artifact "
+            "is taken directly from the 26.2 core."
         )
 
     # ── BASE redirect always forces Merge ─────────────────────────────────────

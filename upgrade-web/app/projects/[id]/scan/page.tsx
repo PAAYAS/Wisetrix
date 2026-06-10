@@ -630,7 +630,7 @@ export default function ScanPage({ params }: { params: { id: string } }) {
                         )}
                         {r.no_customer_content_note && (
                           <div className="mt-1 inline-flex items-center gap-1 rounded bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-950 dark:text-blue-300">
-                            ℹ No customer-specific content — consider removing after upgrade
+                            ℹ No customer-specific content — removed, taken from 26.2 core
                           </div>
                         )}
                       </td>
