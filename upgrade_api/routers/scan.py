@@ -372,6 +372,9 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
 
     source_root = Path(resolved["source_root"])
     target_root = Path(resolved["target_system"])
+    baseline_root = (
+        Path(resolved["baseline_system"]) if resolved.get("baseline_system") else None
+    )
 
     if not resolved["source_root"] or not source_root.exists():
         yield {
@@ -432,7 +435,10 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
         try:
             # Pass system_rel so BASE redirect and category detection work on the
             # real artifact path, not the  DEV/AGCO/…  env_specific prefix.
-            result = compare_artifact_local(customer_dir, sys_dir, system_rel, target_root=target_root)
+            result = compare_artifact_local(
+                customer_dir, sys_dir, system_rel,
+                target_root=target_root, baseline_root=baseline_root,
+            )
             comp_results[key] = {**meta, **result}
             decision = result.get("decision", "?")
         except Exception as e:
