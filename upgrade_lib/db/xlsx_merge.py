@@ -92,6 +92,7 @@ class TabResult:
     matched: int = 0          # JSON records already present as rows
     added: int = 0            # rows appended
     added_alt_keys: dict[str, list[int]] = field(default_factory=dict)
+    exec_seq_synced: int = 0  # existing rows whose exec_seq was set to match JSON
 
 
 @dataclass
@@ -118,6 +119,7 @@ class MergeResult:
                     "matched": t.matched,
                     "added": t.added,
                     "added_alt_keys": t.added_alt_keys,
+                    "exec_seq_synced": t.exec_seq_synced,
                 }
                 for t in self.tabs
             ],
@@ -351,6 +353,38 @@ def _reconcile_tab(ws, json_key: str, records: list[dict], overlap: set[str]) ->
         ws.append(new_cells)
         existing_sigs.add(sig)
         result.added += 1
+
+    # ── Sync EXEC_SEQ to the merged app JSON ────────────────────────────────
+    # exec_seq defines rule execution order. The customer's existing rows carry
+    # their pre-upgrade numbering while the merged JSON has the renumbered final
+    # order, so appended rows can collide (e.g. exec_seq 2 twice). Set every
+    # row's exec_seq from its merged-JSON record (matched by identity) so the DB
+    # workbook mirrors the app policy exactly — no discrepancy, no duplicates.
+    # Only the exec_seq column is touched; all other values stay as-is.
+    if "exec_seq" in headers:
+        seq_by_sig: dict[tuple, Any] = {}
+        for rec in records:
+            rec_norm = {_norm(k): v for k, v in rec.items() if not isinstance(v, list)}
+            if rec_norm.get("exec_seq") is None:
+                continue
+            s = tuple(_norm_val(rec_norm.get(c)) for c in identity)
+            seq_by_sig[s] = rec_norm["exec_seq"]
+
+        if seq_by_sig:
+            es_idx = headers["exec_seq"]
+            inv = {idx: name for name, idx in headers.items()}
+            for row in ws.iter_rows(min_row=2):
+                vals = {inv[c.column]: c.value for c in row if c.column in inv}
+                if not any(v not in (None, "") for v in vals.values()):
+                    continue
+                s = tuple(_norm_val(vals.get(c)) for c in identity)
+                if s not in seq_by_sig:
+                    continue
+                new_es = _coerce_for_write("exec_seq", seq_by_sig[s])
+                cell = row[es_idx - 1]
+                if _norm_val(cell.value) != _norm_val(new_es):
+                    cell.value = new_es
+                    result.exec_seq_synced += 1
 
     return result
 
