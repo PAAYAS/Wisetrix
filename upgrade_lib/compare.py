@@ -28,6 +28,12 @@ EXCLUDE_NAMES = {"component.info", "security.txt"}
 # dgs:              Document Generation System artifacts — not migrated via this tool.
 RETAIN_CATEGORIES = {"custom_privilages", "dgs"}
 
+# Categories that are always Remove — the customer copy is dropped from the
+# upgrade regardless of SYSTEM/baseline (per GTM expert direction).
+# plugindefs: customer plugin definitions are not carried into the upgrade;
+#             they must be taken from / re-established against the 26.2 core.
+REMOVE_CATEGORIES = {"plugindefs"}
+
 # Categories that require a manual DB action before the upgrade is applied.
 # Artifacts in these categories are stored both as files AND as database records.
 # The old DB entry must be deleted before the upgrade so there is no conflict.
@@ -343,6 +349,12 @@ def _is_retain_category(rel_path: str) -> bool:
     return any(p in RETAIN_CATEGORIES for p in parts)
 
 
+def _is_remove_category(rel_path: str) -> bool:
+    """True if any path segment matches a REMOVE_CATEGORIES entry."""
+    parts = Path(rel_path).parts
+    return any(p in REMOVE_CATEGORIES for p in parts)
+
+
 def _system_unchanged_from_baseline(tgt_artifact: Path, baseline_artifact: Path) -> bool:
     """True if the SYSTEM artifact is identical to its baseline counterpart.
 
@@ -460,6 +472,37 @@ def compare_artifact_local(
     # Used to set the no_customer_content_note on the artifact.
     _merge_json_count = 0
     _all_merge_json_no_unique = True
+
+    # ── Remove-only category: skip comparison, artifact is dropped ─────────
+    # e.g. plugindefs — the customer copy is never carried into the upgrade,
+    # regardless of whether SYSTEM has a counterpart (per GTM expert).
+    if _is_remove_category(rel_path):
+        if src_artifact.is_dir():
+            for f in src_artifact.iterdir():
+                if not f.is_file():
+                    continue
+                if f.name in EXCLUDE_NAMES or f.suffix.lower() not in INCLUDE_EXTS:
+                    continue
+                file_decisions[f.name] = "Remove"
+                file_details.append({
+                    "file": f.name,
+                    "decision": "Remove",
+                    "target_exists": (tgt_artifact / f.name).exists(),
+                })
+        remove_label = Path(rel_path).parts[0] if Path(rel_path).parts else "remove-only"
+        return {
+            "decision": "Remove",
+            "file_decisions": file_decisions,
+            "file_details": file_details,
+            "target_exists": target_exists,
+            "target_path": str(tgt_artifact),
+            "file_count": len(file_decisions),
+            "analysis": f"Remove-only category ({remove_label}) — customer copy dropped from the upgrade.",
+            "engine": "local",
+            "base_redirect": None,
+            "no_customer_content_note": None,
+            "baseline_unchanged_note": None,
+        }
 
     # ── Retain-only category: skip comparison, all files = Retain ──────────
     if _is_retain_category(rel_path):
