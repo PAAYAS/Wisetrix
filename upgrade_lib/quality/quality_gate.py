@@ -57,15 +57,26 @@ class QualityResult:
 # Conflict marker patterns
 _CONFLICT_RE = re.compile(r"^(<{7}|={7}|>{7})", re.MULTILINE)
 
-# Java method signature pattern (simplified)
+# Java method DECLARATION pattern: an access modifier, a return type, a name,
+# an arg list with no `;`/`{` (so invocations and constructor calls don't
+# match), optional `throws`, then the opening brace of the body. Requiring the
+# modifier + trailing `{` avoids matching control-flow (`if(...)`), method
+# invocations (`foo(...)`) and `new X(...)` constructor calls.
 _JAVA_METHOD_RE = re.compile(
-    r"^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:final\s+)?"
-    r"(?:synchronized\s+)?(?:[\w<>\[\],\s]+)\s+(\w+)\s*\(([^)]*)\)",
+    r"(?:public|private|protected)\s+[\w<>\[\],\s]+?\s+(\w+)\s*\(([^;{]*)\)\s*"
+    r"(?:throws[\w\s,\.]+)?\{",
     re.MULTILINE,
 )
 
 # Java import pattern
 _JAVA_IMPORT_RE = re.compile(r"^\s*import\s+(?:static\s+)?([\w.]+)\s*;", re.MULTILINE)
+
+# Control-flow / non-method keywords the simplified method regex can match as a
+# "method name" — never real method declarations.
+_NON_METHOD_NAMES = frozenset({
+    "if", "for", "while", "switch", "catch", "do", "else", "return",
+    "synchronized", "try", "new", "throw", "throws", "instanceof",
+})
 
 
 class QualityGate:
@@ -137,6 +148,22 @@ class QualityGate:
 
     @staticmethod
     def _check_json(filename: str, content: str) -> list[Finding]:
+        # `_diff.json` files are NOT standard JSON — they use the runtime delta
+        # format `ARTIFACT_ID:[ ... ]` (a bare key + array). Validate the array
+        # portion (after the leading `key:`) instead of the whole string.
+        if filename.endswith("_diff.json"):
+            try:
+                idx = content.index(":[")
+                json.loads(content[idx + 1:])
+                return []
+            except (ValueError, json.JSONDecodeError) as e:
+                return [Finding(
+                    severity="ERROR",
+                    category="invalid_diff_json",
+                    file=filename,
+                    line=getattr(e, "lineno", None),
+                    message=f"Invalid _diff.json (expected 'ARTIFACT_ID:[...]'): {e}",
+                )]
         try:
             json.loads(content)
             return []
@@ -172,6 +199,14 @@ class QualityGate:
 
         for match in _JAVA_METHOD_RE.finditer(content):
             name = match.group(1)
+            # The simplified regex also matches control-flow (`if(...)`,
+            # `for(...)`) and constructor/exception calls (`new XException(...)`)
+            # — skip those so they aren't reported as duplicate "methods".
+            if name in _NON_METHOD_NAMES:
+                continue
+            preceding = content[max(0, match.start() - 12):match.start()]
+            if preceding.rstrip().endswith(("new", "throw", "return", "=", ".")):
+                continue
             params = match.group(2).strip()
             # Normalize param types (strip names, keep types)
             param_types = []
