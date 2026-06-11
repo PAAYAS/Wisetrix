@@ -322,8 +322,14 @@ class BaseAgent(_get_learning_mixin()):
                 )
             except RuntimeError as exc:
                 err_str = str(exc)
-                # Don't retry on permanent errors
-                if "Prompt is too long" in err_str:
+                # Don't retry on permanent errors — retrying the same oversized
+                # input just fails identically (and wastes time). The 10MB stdin
+                # limit means the caller must pass content as files, not inline.
+                if (
+                    "Prompt is too long" in err_str
+                    or "exceeds 10MB" in err_str
+                    or "piped stdin input" in err_str
+                ):
                     raise
                 last_err = exc
                 _log.warning(

@@ -88,6 +88,42 @@ Respond as a single JSON object, nothing else:
 """
 
 
+# File-based variant — used when the merged + system JSON are too large to pipe
+# inline (the Claude CLI rejects stdin > 10MB). The content lives on disk and is
+# read with the Read tool instead of being embedded in the prompt.
+DIFF_JSON_FILE_PROMPT = """Generate a runtime _diff.json capturing the delta between the merged artifact and SYSTEM 26.2 base.
+
+# Diff Format Spec
+{diff_format_spec}
+
+# Inputs (large — read from disk with the Read tool)
+The two JSON files are in your current working directory:
+  ./merged.json   — the merged artifact ({merged_name})
+  ./system.json   — the SYSTEM 26.2 base ({system_name})
+
+Read BOTH files fully before producing output. They may be large — use the Read
+tool's offset/limit to read in chunks if needed, and make sure you have read to
+the end of each file.
+
+# Your Task
+
+Produce the complete _diff.json content for artifact id: {artifact_name}.
+
+Follow the Diff Format Spec exactly:
+- MOD_FIELDS for top-level scalar differences (always include BASE_SET_ID).
+- NEW_RECORD for child records present in merged but not in SYSTEM (by primary key).
+- DEL_RECORD for child records in SYSTEM but not in merged.
+- Skip children where both sides agree OR where the only difference is ROW_SEQ/SET_VALIDATION_ID due to merge ordering.
+
+Respond as a single JSON object, nothing else:
+
+{{
+  "diff_json": "<full _diff.json content as a string, exactly as it should be written to disk>",
+  "explanation": "<1-2 sentences on what deltas were emitted>"
+}}
+"""
+
+
 REVIEW_PROMPT = """Review the merged output of an upgrade for correctness and safety.
 
 # Inputs
