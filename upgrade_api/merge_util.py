@@ -227,14 +227,42 @@ def perform_merge(
         if not baseline_files and base_redirect:
             baseline_files = read_artifact_files(baseline_root / base_redirect)
 
+    # ── Route large JSON straight to deterministic — don't wait on the LLM ───
+    # The LLM can't reliably merge a multi-MB JSON, so don't even send it: it
+    # would just burn minutes and drop the file. Exclude large JSON from the
+    # LLM inputs; deterministic_fill() (below) merges them instantly. The LLM
+    # still handles code + small JSON.
+    from upgrade_lib.json_merge import LARGE_JSON_BYTES
+
+    def _is_large_json(fname: str) -> bool:
+        if not fname.endswith(".json") or fname.endswith("_diff.json"):
+            return False
+        return (
+            len(customer_files.get(fname, "")) >= LARGE_JSON_BYTES
+            or len(system_files.get(fname, "")) >= LARGE_JSON_BYTES
+        )
+
+    large_json = {
+        f for f in (set(customer_files) | set(system_files)) if _is_large_json(f)
+    }
+    llm_customer = {f: c for f, c in customer_files.items() if f not in large_json}
+    llm_system = {f: c for f, c in system_files.items() if f not in large_json}
+    llm_baseline = {
+        f: c for f, c in (baseline_files or {}).items() if f not in large_json
+    } or None
+    if large_json:
+        emit("large_json_deterministic", key=key, files=sorted(large_json))
+        _log.info("[merge] %s: %d large JSON routed to deterministic (skipped LLM): %s",
+                  key, len(large_json), sorted(large_json))
+
     emit(
         "claude_merge_start",
         key=key,
-        files=len(customer_files),
-        has_baseline=bool(baseline_files),
+        files=len(llm_customer),
+        has_baseline=bool(llm_baseline),
     )
     merge_res = client.merge_artifact(
-        customer_files, system_files, baseline_files, customer=bucket
+        llm_customer, llm_system, llm_baseline, customer=bucket
     )
     artifact_files, analysis_files = _split_analysis_files(merge_res["merged_files"])
     emit("claude_merge_done", key=key, files=len(artifact_files))
@@ -306,6 +334,7 @@ def perform_merge(
 
     diff_info = None
     diff_error: str | None = None
+    diff_carried_forward = False
     customer_has_diff = any(
         name.endswith("_diff.json") for name in customer_files
     )
@@ -315,7 +344,28 @@ def perform_merge(
         for fname, content in artifact_files.items():
             if fname.endswith(".json") and not fname.endswith("_diff.json"):
                 sys_content = system_files.get(fname)
-                if sys_content:
+                diff_name = fname.replace(".json", "_diff.json")
+                # ── Large JSON: carry the customer's existing _diff.json forward ──
+                # The _diff.json captures the customer's customizations, which
+                # persist across the upgrade (only the base version changes, and
+                # the runtime re-applies the diff on the new base). An LLM can't
+                # reliably recompute a multi-MB recursive diff, so for large
+                # artifacts we deterministically carry the customer's diff
+                # forward instead of regenerating it.
+                if len(content) >= LARGE_JSON_BYTES and diff_name in customer_files:
+                    (out_dir / diff_name).write_text(
+                        customer_files[diff_name], encoding="utf-8"
+                    )
+                    diff_info = {"diff_json": customer_files[diff_name]}
+                    diff_carried_forward = True
+                    emit("diff_carried_forward", key=key, file=diff_name)
+                    _log.info("[merge] %s: carried customer %s forward (large artifact)",
+                              key, diff_name)
+                elif len(content) >= LARGE_JSON_BYTES:
+                    # large but no existing customer diff to carry — skip rather
+                    # than attempt an unreliable LLM diff of a multi-MB file
+                    emit("diff_skipped", key=key, file=fname, reason="large artifact, no customer _diff.json")
+                elif sys_content:
                     try:
                         emit("diff_start", key=key, file=fname)
                         artifact_id = Path(rel).name
@@ -326,7 +376,6 @@ def perform_merge(
                             merged_name=fname,
                             system_name=fname,
                         )
-                        diff_name = fname.replace(".json", "_diff.json")
                         (out_dir / diff_name).write_text(
                             diff_info["diff_json"], encoding="utf-8"
                         )
@@ -367,6 +416,7 @@ def perform_merge(
         "base_redirect": base_redirect,
         "db_warning": db_warning,
         "diff_generated": diff_info is not None,
+        "diff_carried_forward": diff_carried_forward,
         "diff_error": diff_error,
         "out_dir": str(out_dir),
         "quality_result": quality_result,
