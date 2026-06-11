@@ -103,31 +103,49 @@ def _identity_key(*record_lists: list) -> str | None:
 # --------------------------------------------------------------------------- #
 
 def _merge(base: Any, cust: Any, syst: Any) -> Any:
-    """3-way merge of one node. `base` may be a sentinel _MISSING."""
-    # customer didn't change vs baseline → adopt SYSTEM (the upgrade)
-    if base is not _MISSING and _eq(cust, base):
-        return syst if syst is not _MISSING else cust
-    # SYSTEM didn't change vs baseline → keep customer (preserve customization)
-    if base is not _MISSING and syst is not _MISSING and _eq(syst, base):
-        return cust
-    # one side missing the node
-    if cust is _MISSING:
-        return syst
-    if syst is _MISSING:
-        return cust
+    """3-way merge of one node.
 
-    # both present & both changed (or no baseline) ----------------------------
+    Any of `base`/`cust`/`syst` may be the sentinel _MISSING (key absent on
+    that side). A return value of _MISSING means "omit this key" — the caller
+    (dict builder) must skip it.
+    """
+    cust_m = cust is _MISSING
+    syst_m = syst is _MISSING
+    base_m = base is _MISSING
+
+    # ── one side is missing the key ──────────────────────────────────────────
+    if cust_m and syst_m:
+        return _MISSING
+    if cust_m:
+        # customer doesn't have the key
+        if base_m:
+            return syst                      # new in SYSTEM → adopt
+        if _eq(syst, base):
+            return _MISSING                  # customer deleted it, SYSTEM unchanged → omit
+        return syst                          # SYSTEM changed it; keep the upgrade
+    if syst_m:
+        # SYSTEM doesn't have the key
+        if base_m:
+            return cust                      # customer-new key → keep
+        if _eq(cust, base):
+            return _MISSING                  # SYSTEM deleted it, customer unchanged → adopt deletion
+        return cust                          # customer changed it → keep customization
+
+    # ── both present ─────────────────────────────────────────────────────────
+    if not base_m and _eq(cust, base):
+        return syst                          # customer unchanged vs base → adopt SYSTEM
+    if not base_m and _eq(syst, base):
+        return cust                          # SYSTEM unchanged vs base → keep customer
+
+    # both changed (or no baseline)
     if isinstance(cust, dict) and isinstance(syst, dict):
         base_d = base if isinstance(base, dict) else {}
         out: dict[str, Any] = {}
-        # SYSTEM key order first, then customer-only keys (stable, upgrade-first)
         ordered = list(syst.keys()) + [k for k in cust if k not in syst]
         for k in ordered:
-            out[k] = _merge(
-                base_d.get(k, _MISSING),
-                cust.get(k, _MISSING),
-                syst.get(k, _MISSING),
-            )
+            res = _merge(base_d.get(k, _MISSING), cust.get(k, _MISSING), syst.get(k, _MISSING))
+            if res is not _MISSING:
+                out[k] = res
         return out
 
     if isinstance(cust, list) and isinstance(syst, list):
@@ -135,8 +153,7 @@ def _merge(base: Any, cust: Any, syst: Any) -> Any:
         idk = _identity_key(cust, syst, base_l)
         if idk is not None:
             return _merge_keyed_list(base_l, cust, syst, idk)
-        # unkeyed list (scalars or no identity): customer's list wins (it's the
-        # customer's customization of this whole array)
+        # unkeyed list (scalars or no identity): customer's list wins
         return cust
 
     # scalar (or type mismatch) conflict → customer wins
@@ -209,6 +226,8 @@ def merge_json_3way(customer: str, system: str, baseline: str | None) -> str:
     syst = json.loads(system)
     base = json.loads(baseline) if baseline else _MISSING
     merged = _merge(base, cust, syst)
+    if merged is _MISSING:  # defensive — never serialize the sentinel
+        merged = cust
     return json.dumps(merged, indent=3, ensure_ascii=False)
 
 
