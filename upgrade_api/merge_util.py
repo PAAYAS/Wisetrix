@@ -239,6 +239,24 @@ def perform_merge(
     artifact_files, analysis_files = _split_analysis_files(merge_res["merged_files"])
     emit("claude_merge_done", key=key, files=len(artifact_files))
 
+    # ── Deterministic backstop for large / dropped JSON ──────────────────────
+    # The LLM can't hold a multi-MB JSON in context, so it silently drops or
+    # mangles large files (e.g. a big integration_def.json). Deterministically
+    # produce any mergeable file the LLM failed to output, and override large
+    # JSON files. Small files keep the LLM output.
+    try:
+        from upgrade_lib.json_merge import deterministic_fill
+
+        artifact_files, filled = deterministic_fill(
+            artifact_files, customer_files, system_files, baseline_files
+        )
+        if filled:
+            emit("deterministic_merge", key=key, files=filled)
+            _log.info("[merge] deterministic fill for %s: %s", key, filled)
+    except Exception as exc:  # noqa: BLE001 — backstop must never break a merge
+        _log.warning("[merge] deterministic fill failed for %s: %s", key, exc)
+        filled = []
+
     out_dir = out_root / bucket / rel
     write_artifact_files(out_dir, artifact_files)
 
@@ -353,4 +371,5 @@ def perform_merge(
         "out_dir": str(out_dir),
         "quality_result": quality_result,
         "dropped_additions": dropped,
+        "deterministic_files": filled,
     }
