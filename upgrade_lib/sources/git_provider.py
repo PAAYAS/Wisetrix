@@ -207,6 +207,7 @@ class GitProvider(SourceProvider):
                     f"refs/heads/{branch}:refs/remotes/origin/{branch}",
                     "--no-tags",
                     "--depth=1",
+                    "--force",
                 )
                 # Make sure local branch exists and points at the tracking ref.
                 try:
