@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse  # noqa: E402
 
 from upgrade_api.config import cors_origins  # noqa: E402
 from upgrade_api.routers import (  # noqa: E402
+    db,
     diff,
     health,
     jira,
@@ -133,4 +134,5 @@ app.include_router(merges.router)
 app.include_router(summary.router)
 app.include_router(diff.router)
 app.include_router(jira.router)
+app.include_router(db.router)
 app.include_router(get_mcp_router(), prefix="/mcp", tags=["learning"])

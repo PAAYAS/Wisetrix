@@ -9,6 +9,7 @@ pyyaml>=6.0
 atlassian-python-api>=3.41.0
 markdown>=3.5.0
 reportlab>=4.0.0
+openpyxl>=3.1.0  # DB seed-data (bppol) xlsx reconciliation
 # FastAPI service (used by upgrade-api/ and the Next.js frontend)
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0

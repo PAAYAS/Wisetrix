@@ -53,6 +53,16 @@ def resolved_paths_path(project_id: str) -> Path:
     return RUN_STATE_DIR / f"{_safe_id(project_id)}.resolved.json"
 
 
+def db_comparison_path(project_id: str) -> Path:
+    """DB-side per-artifact actions derived from the app comparison."""
+    return RUN_STATE_DIR / f"{_safe_id(project_id)}.db.comparison.json"
+
+
+def db_merge_report_path(project_id: str) -> Path:
+    """DB-side xlsx reconciliation records."""
+    return RUN_STATE_DIR / f"{_safe_id(project_id)}.db.merges.json"
+
+
 def load_json(path: Path, default: Any) -> Any:
     if not path.exists():
         return default

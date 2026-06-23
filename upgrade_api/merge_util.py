@@ -245,15 +245,31 @@ def perform_merge(
     large_json = {
         f for f in (set(customer_files) | set(system_files)) if _is_large_json(f)
     }
-    llm_customer = {f: c for f, c in customer_files.items() if f not in large_json}
-    llm_system = {f: c for f, c in system_files.items() if f not in large_json}
+    # _diff.json sidecars are NEVER merged by the LLM. They are handled
+    # deterministically by the diff pipeline below (carried forward for large
+    # artifacts, or regenerated from the merged base). Sending them to the LLM
+    # is pure waste — they can be hundreds of KB (dominating merge runtime), the
+    # output is discarded by the diff pipeline anyway, and the extra context
+    # pressure makes the LLM more likely to truncate the real code files it is
+    # merging alongside (e.g. dropping imports + helper methods from a .java).
+    diff_json = {
+        f for f in (set(customer_files) | set(system_files))
+        if f.endswith("_diff.json")
+    }
+    exclude_from_llm = large_json | diff_json
+    llm_customer = {f: c for f, c in customer_files.items() if f not in exclude_from_llm}
+    llm_system = {f: c for f, c in system_files.items() if f not in exclude_from_llm}
     llm_baseline = {
-        f: c for f, c in (baseline_files or {}).items() if f not in large_json
+        f: c for f, c in (baseline_files or {}).items() if f not in exclude_from_llm
     } or None
     if large_json:
         emit("large_json_deterministic", key=key, files=sorted(large_json))
         _log.info("[merge] %s: %d large JSON routed to deterministic (skipped LLM): %s",
                   key, len(large_json), sorted(large_json))
+    if diff_json:
+        emit("diff_json_excluded_from_llm", key=key, files=sorted(diff_json))
+        _log.info("[merge] %s: %d _diff.json excluded from LLM (handled by diff pipeline): %s",
+                  key, len(diff_json), sorted(diff_json))
 
     emit(
         "claude_merge_start",
