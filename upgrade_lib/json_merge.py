@@ -253,6 +253,11 @@ def deterministic_fill(
     }
 
     for fname in sorted(expected):
+        # _diff.json sidecars use the runtime delta format (`ARTIFACT_ID:[...]`),
+        # not standard JSON — they are handled by the diff pipeline, never by the
+        # generic 3-way JSON merge. Skip so we don't mis-parse/mangle them.
+        if fname.endswith("_diff.json"):
+            continue
         ext = Path(fname).suffix.lower()
         cust = customer_files.get(fname)
         syst = system_files.get(fname)
