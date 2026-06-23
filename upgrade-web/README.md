@@ -1,10 +1,8 @@
 # upgrade-web
 
 Next.js 14 (App Router) + Tailwind + shadcn-style components.
-Talks to the FastAPI service in `upgrade_api/` for everything.
-
-The Streamlit app at `upgrade-frontend/` is still maintained as a backup,
-but `upgrade-web/` is now the primary UI.
+Talks to the FastAPI service in `upgrade_api/` for everything. This is the
+project's UI.
 
 ---
 
@@ -175,7 +173,7 @@ Feature-complete:
 - Setup, Scan & Compare, Merge (single + bulk with SSE progress),
   Diff Viewer, JIRA match, Summary narrative, downloadable Upgrade Report.
 
-Streamlit-parity gaps still pending:
+Not yet implemented:
 - Chat tab
 - Review & Edit tab (Claude markdown review + inline file editor)
 - Manual JIRA ticket key override

@@ -28,7 +28,6 @@ yarn-error.log*
 # --- Runtime state / generated outputs ---
 run_state/
 output/
-upgrade-frontend/output/
 
 # --- Logs ---
 logs/

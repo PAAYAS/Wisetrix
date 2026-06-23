@@ -37,7 +37,6 @@ where exactness beats judgement.
 | FastAPI endpoint / SSE stream | `upgrade_api/routers/<tab>.py` |
 | Next.js UI page | `upgrade-web/app/projects/[id]/<tab>/page.tsx` |
 | SSE phase label shown to users | `PHASE_LABELS` in the consuming page (`merges/page.tsx`, `scan/page.tsx`) |
-| Streamlit UI / tabs | `upgrade-frontend/app.py` |
 | New customer | **No code change.** Use the Add / Update Project form. |
 
 ---

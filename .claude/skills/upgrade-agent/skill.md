@@ -62,9 +62,6 @@ ta-ai-docker-upgrade-v2/
 │   └── report/                      #   Report generation
 │       └── report_generator.py      #     UPGRADE_REPORT.md with JIRA + risk context
 │
-├── upgrade-frontend/
-│   └── app.py                       #   Streamlit UI (8 tabs)
-│
 ├── docs/
 │   └── ARCHITECTURE.md              #   Engineering reference
 ├── config.example.yaml              #   Credential template (Artifactory, JIRA, Git)

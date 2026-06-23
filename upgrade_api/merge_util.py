@@ -1,5 +1,5 @@
-"""Merge execution helpers — ported from upgrade-frontend/app.py so the
-FastAPI service can run the same Claude-based merge pipeline."""
+"""Merge execution helpers — the Claude-based merge pipeline run by the
+FastAPI service."""
 
 from __future__ import annotations
 

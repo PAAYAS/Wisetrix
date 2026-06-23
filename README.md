@@ -64,11 +64,7 @@ It runs on your existing **Claude Code** login. No `ANTHROPIC_API_KEY` to manage
 
 ```bash
 pip install -r requirements.txt
-```
 
-### Primary UI — Next.js + FastAPI
-
-```bash
 # terminal 1 — API service
 uvicorn upgrade_api.main:app --port 8000
 
@@ -77,14 +73,6 @@ cd upgrade-web && npm install && npm run dev
 ```
 
 Open **<http://localhost:3000>**.
-
-### Backup UI — Streamlit
-
-```bash
-streamlit run upgrade-frontend/app.py     # opens http://localhost:8501
-```
-
-Both UIs drive the same engine and share the same state (`projects.json`, `run_state/`, `output/`) — you can switch between them at any time.
 
 ---
 

@@ -12,7 +12,6 @@ Flags:
     --port-api  <n>   FastAPI port  (default 8000)
     --port-web  <n>   Next.js port  (default 3000)
     --no-reload       Disable FastAPI auto-reload
-    --streamlit       Use Streamlit UI instead of Next.js
 
 Press Ctrl+C to stop all processes.
 """
@@ -143,21 +142,6 @@ def _start_web(port: int, api_port: int) -> subprocess.Popen:
     )
 
 
-def _start_streamlit() -> subprocess.Popen:
-    cmd = [_find_python(), "-m", "streamlit", "run", "upgrade-frontend/app.py"]
-    env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
-    return subprocess.Popen(
-        cmd,
-        cwd=str(ROOT),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=env,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -167,17 +151,12 @@ def main() -> None:
     parser.add_argument("--port-api",   type=int, default=8000)
     parser.add_argument("--port-web",   type=int, default=3000)
     parser.add_argument("--no-reload",  action="store_true")
-    parser.add_argument("--streamlit",  action="store_true",
-                        help="Use Streamlit UI instead of Next.js")
     args = parser.parse_args()
 
     print()
     print(_tag("launcher") + _BOLD + "Upgrade Agent — starting all services" + _RESET)
     print(_tag("launcher") + f"  FastAPI  -> http://localhost:{args.port_api}")
-    if args.streamlit:
-        print(_tag("launcher") + f"  Streamlit -> http://localhost:8501")
-    else:
-        print(_tag("launcher") + f"  Next.js  -> http://localhost:{args.port_web}")
+    print(_tag("launcher") + f"  Next.js  -> http://localhost:{args.port_web}")
     print(_tag("launcher") + "  Claude Router is embedded in FastAPI (no separate process)")
     print()
 
@@ -185,9 +164,8 @@ def main() -> None:
     _print_router_table()
     print()
 
-    if not args.streamlit:
-        _ensure_env_local()
-        _ensure_npm_install()
+    _ensure_env_local()
+    _ensure_npm_install()
 
     # Launch processes
     procs: list[tuple[subprocess.Popen, str]] = []
@@ -197,14 +175,9 @@ def main() -> None:
     procs.append((api_proc, "api"))
     time.sleep(1)  # brief head start for the API
 
-    if args.streamlit:
-        print(_tag("launcher") + "Starting Streamlit UI...")
-        web_proc = _start_streamlit()
-        procs.append((web_proc, "web"))
-    else:
-        print(_tag("launcher") + "Starting Next.js frontend...")
-        web_proc = _start_web(args.port_web, args.port_api)
-        procs.append((web_proc, "web"))
+    print(_tag("launcher") + "Starting Next.js frontend...")
+    web_proc = _start_web(args.port_web, args.port_api)
+    procs.append((web_proc, "web"))
 
     # Start a reader thread per process
     threads = []

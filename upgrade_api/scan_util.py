@@ -1,6 +1,5 @@
-"""Source resolution + artifact scanning helpers — ported from
-`upgrade-frontend/app.py` so the FastAPI service can run the same
-deterministic scan/compare pipeline."""
+"""Source resolution + artifact scanning helpers — the deterministic
+scan/compare pipeline run by the FastAPI service."""
 
 from __future__ import annotations
 

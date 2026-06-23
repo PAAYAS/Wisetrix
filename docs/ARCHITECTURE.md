@@ -12,7 +12,7 @@ This document complements [`README.md`](../README.md) with the engineering detai
 | **Merge uses Claude with Read/Write tools.** | Python stages files into a temp working directory, hands Claude the paths + the merge policy, and reads back the merged output. Python makes zero merge decisions. |
 | **Compare is local.** | Determinism + speed. Claude only handles operations where semantic understanding earns its keep (merge, review, summary, chat). |
 | **Zero hardcoded customer names.** | A single constant — `SYSTEM_BUCKET_NAME = "SYSTEM"` — is the only special-cased string. Everything else is auto-detected. |
-| **Streamlit is a thin shell.** | UI does file I/O + orchestration only. Every piece of intelligence lives in `upgrade_lib`. |
+| **The UI is a thin shell.** | UI does file I/O + orchestration only. Every piece of intelligence lives in `upgrade_lib`. |
 | **Quality gates are deterministic.** | Run before Claude review to save tokens. No Claude calls in quality or risk checks. |
 | **Policies stay in `policies/`.** | Plain-English rules are the source of truth. Never embed policy logic in Python. |
 
@@ -84,9 +84,6 @@ Wisetrix/
 ├── upgrade-web/                     # Next.js 14 UI (primary)
 │   └── README.md                    #   Dev guide — covers SSE bypass + requestDirect patterns
 │
-├── upgrade-frontend/
-│   └── app.py                       #   Streamlit UI (backup, still maintained)
-│
 ├── docs/
 │   └── ARCHITECTURE.md              #   This file
 ├── config.example.yml               #   Credential template → copy to config.yaml (gitignored)
@@ -101,7 +98,7 @@ Wisetrix/
 ## 3. Module dependency graph
 
 ```
-upgrade-frontend/app.py
+upgrade_api/ (FastAPI)  ◀──  upgrade-web/ (Next.js)
         │
         ├──► upgrade_lib.UpgradeClient           (claude_client.py — facade)
         │           │
@@ -139,7 +136,7 @@ upgrade-frontend/app.py
                     └──► ReportGenerator          (report_generator.py)
 ```
 
-No circular imports. `upgrade_lib` knows nothing about Streamlit. `compare.py` knows nothing about Claude.
+No circular imports. `upgrade_lib` knows nothing about the UI. `compare.py` knows nothing about Claude.
 
 ---
 
@@ -159,7 +156,7 @@ No circular imports. `upgrade_lib` knows nothing about Streamlit. `compare.py` k
 
 Shared transport for every agent:
 
-- `_call(prompt, system=None, *, allowed_tools=..., add_dirs=..., max_turns_override=..., cwd=..., timeout_override=...)` — invokes the `claude` CLI as a subprocess via `claude -p` (print mode). Reliable inside Streamlit (no async event-loop conflicts). Optional kwargs enable tool-using agentic calls.
+- `_call(prompt, system=None, *, allowed_tools=..., add_dirs=..., max_turns_override=..., cwd=..., timeout_override=...)` — invokes the `claude` CLI as a subprocess via `claude -p` (print mode). Reliable in any context — no async event-loop conflicts. Optional kwargs enable tool-using agentic calls.
 - `_find_claude_exe()` — locates `claude.exe` directly to bypass shell-script wrappers on Windows.
 - Built-in retry with backoff for transient errors. `"Prompt is too long"` is non-retryable.
 - `extract_json()` — tolerant JSON parser (strips fences, finds outermost `{}`).
@@ -361,7 +358,7 @@ Mutates the results dict in place. Two rules — both **bucket-scoped**:
 
 ### Policy loader
 
-`_load_doc(name)` loads from `policies/` directory, cached in `_POLICY_CACHE`. To pick up edits without restarting Streamlit, restart the process.
+`_load_doc(name)` loads from `policies/` directory, cached in `_POLICY_CACHE`. To pick up edits, restart the API process.
 
 ### Per-agent system prompts
 
@@ -394,8 +391,8 @@ claude -p --model <model> --output-format text \
 ```
 
 Why subprocess instead of `claude_agent_sdk.query()`:
-- The SDK is async and conflicted with Streamlit's event-loop on Windows.
-- `subprocess.run` is reliable in any context (Streamlit, CLI, threads).
+- The async SDK conflicted with host event-loops on Windows.
+- `subprocess.run` is reliable in any context (API server threads, CLI).
 - The prompt is passed via stdin to avoid Windows command-line length limits (`WinError 206`).
 
 ### Tool-using calls (merge agent only)
@@ -410,10 +407,10 @@ Strips ``` ```json ``` fences and finds the outermost `{ ... }` substring. Toler
 
 ## 12. The UI layer
 
-There are two UIs against the same `upgrade_lib` engine. The Next.js +
-FastAPI stack is primary; Streamlit is preserved as a backup.
+The UI is a Next.js app (`upgrade-web/`) over a FastAPI service
+(`upgrade_api/`) against the `upgrade_lib` engine.
 
-### 12a. FastAPI service (`upgrade_api/`) + Next.js (`upgrade-web/`)
+### FastAPI service (`upgrade_api/`) + Next.js (`upgrade-web/`)
 
 The Next.js UI is a thin client over a FastAPI service. FastAPI sits
 between the UI and `upgrade_lib`, exposing a REST + SSE surface per UI tab.
@@ -479,23 +476,6 @@ loop stays responsive and can stream progress events concurrently.
   `requestDirect()` in `upgrade-web/lib/api.ts` to bypass the rewrite.
 
 Full developer notes live in `upgrade-web/README.md`.
-
-### 12b. Streamlit UI (`upgrade-frontend/app.py`)
-
-Still maintained for parity / fallback. Same engine, same 8-tab layout.
-
-#### 8 tabs
-
-| Tab | Purpose |
-|-----|---------|
-| **Summary** | Risk distribution, quality gate stats, UPGRADE_REPORT.md generation + download |
-| **Setup** | Git/Artifactory/local config, test connections, save/delete projects |
-| **Scan & Compare** | Run compare + risk scoring, filter by decision/risk level, JIRA column |
-| **Merge Queue** | Risk badges per artifact, quality gate blocking, merge-all |
-| **Diff Viewer** | Side-by-side `_diff.json` inspection |
-| **Review & Edit** | Structured PASS/WARN/FAIL + legacy markdown review |
-| **JIRA** | Epic management, ticket lookup, bulk subtask creation, sync to JIRA |
-| **Chat** | Free-form Q&A with risk context |
 
 ### Source resolution
 
@@ -705,8 +685,9 @@ A small feedback mechanism that lets agent runs learn from past failures:
   store is unreachable the primary workflow is never blocked.
 
 > ⚠️ **Known limitations (redesign pending a product decision):** the hooks currently
-> reach the store over HTTP at a hardcoded `localhost:8000`, so the layer is inert in
-> the Streamlit and CLI entry points and adds latency when unreachable; `has_baseline`
+> reach the store over HTTP at a hardcoded `localhost:8000`, so the layer is inert when
+> the API is run on a different port or invoked out-of-process, and adds latency when
+> unreachable; `has_baseline`
 > is not yet populated; injected text is appended to the system prompt (cache impact);
 > and `lessons/` is not gitignored. Treat this section as a description of *what exists*,
 > not an endorsement of the current wiring.
