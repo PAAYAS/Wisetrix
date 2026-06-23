@@ -1,4 +1,4 @@
-# Yantrix / Wisetrix — configuration template
+# Wisetrix — configuration template
 #
 # Copy this file to config.yaml and fill in your real values.
 # config.yaml is gitignored and must NEVER be committed (contains credentials).
