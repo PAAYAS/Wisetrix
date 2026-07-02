@@ -89,6 +89,11 @@ Do NOT include file contents in the JSON — they are already on disk under ./me
   consistent with usage.
 - Do NOT write MERGE_REPORT.md, MERGE_SUMMARY.txt, VERIFICATION_CHECKLIST.txt or any
   analysis/documentation files. Write ONLY the actual merged artifact files to ./merged/.
+- NEVER respond with a summary instead of merging, and NEVER stop because the artifact
+  seems large or complex. You write files incrementally with the Write tool, so total
+  size is never a reason to stop. If there are many files, merge and write them one at a
+  time until every file exists in ./merged/. A summary is not an acceptable substitute
+  for writing the files.
 """
 
 
@@ -163,6 +168,10 @@ class MergeAgent(BaseAgent):
     _MERGE_MAX_TURNS = 200
     # Tool-using merges can take longer than single-shot prompts.
     _MERGE_TIMEOUT_SECONDS = 1800  # 30 minutes per artifact
+    # Total merge invocations before giving up: the first pass plus targeted
+    # re-prompts listing the files still missing from ./merged/. Guards against
+    # Claude bailing with a summary or writing only a subset of files.
+    _MERGE_COMPLETION_ATTEMPTS = 3
 
     def merge(
         self,
@@ -225,19 +234,54 @@ class MergeAgent(BaseAgent):
                 workdir, total_files, total_bytes, dynamic_turns,
             )
 
-            raw = self._call(
-                prompt,
-                allowed_tools=["Read", "Write", "Glob", "LS"],
-                add_dirs=[str(workdir)],
-                max_turns_override=dynamic_turns,
-                cwd=str(workdir),
-                timeout_override=self._MERGE_TIMEOUT_SECONDS,
-                estimated_file_count=total_files,
-            )
+            # The full set of expected output files is the UNION of customer/ and
+            # system/ relative paths. Claude may bail with a summary or write only
+            # some files; if so, re-prompt with the exact missing paths before we
+            # give up. This is the safety net for artifact types (e.g. windowdef_tiles)
+            # that have no deterministic fallback.
+            expected = {p for p in (customer_files or {})} | \
+                       {p for p in (system_files or {})}
 
-            # Read merged files back from disk
-            merged_files = _read_tree(merged_dir)
-            _log.info("[merge] Claude wrote %d merged files", len(merged_files))
+            merged_files: dict[str, str] = {}
+            raw = ""
+            for attempt in range(1, self._MERGE_COMPLETION_ATTEMPTS + 1):
+                if attempt == 1:
+                    prompt_to_send = prompt
+                else:
+                    missing = sorted(expected - set(_read_tree(merged_dir)))
+                    _log.warning(
+                        "[merge] Incomplete output (attempt %d): %d file(s) still "
+                        "missing, re-prompting: %s",
+                        attempt - 1, len(missing), missing,
+                    )
+                    prompt_to_send = (
+                        "Your previous response did NOT write all files to ./merged/. "
+                        "Do NOT summarize and do NOT stop — use the Write tool now. "
+                        "The customer/, system/, and baseline/ inputs are unchanged in "
+                        "this same working directory. These files still need to be "
+                        f"written to ./merged/ (relative paths): {missing}. "
+                        "Apply the merge policy to each and Write it, then reply with a "
+                        'single JSON object: {"explanation": "..."}.'
+                    )
+
+                raw = self._call(
+                    prompt_to_send,
+                    allowed_tools=["Read", "Write", "Glob", "LS"],
+                    add_dirs=[str(workdir)],
+                    max_turns_override=dynamic_turns,
+                    cwd=str(workdir),
+                    timeout_override=self._MERGE_TIMEOUT_SECONDS,
+                    estimated_file_count=total_files,
+                )
+
+                # Read merged files back from disk
+                merged_files = _read_tree(merged_dir)
+                _log.info(
+                    "[merge] Claude wrote %d merged files (attempt %d, %d expected)",
+                    len(merged_files), attempt, len(expected),
+                )
+                if merged_files and not (expected - set(merged_files)):
+                    break  # every expected file is present — done
 
             # Extract explanation (best-effort — the merged files are the source of truth)
             explanation = ""
@@ -252,8 +296,10 @@ class MergeAgent(BaseAgent):
                 # MCP: record this silent failure pattern so future runs are warned
                 self._store_empty_merge(prompt, str(workdir), total_files)
                 raise RuntimeError(
-                    "Merge produced no output files. Claude may have failed to "
-                    "write to ./merged/. Last response: " + (raw[:1000] if raw else "(empty)")
+                    f"Merge produced no output files after "
+                    f"{self._MERGE_COMPLETION_ATTEMPTS} attempts — Claude returned a "
+                    "summary/analysis instead of writing to ./merged/. Last response: "
+                    + (raw[:1000] if raw else "(empty)")
                 )
 
             return {
