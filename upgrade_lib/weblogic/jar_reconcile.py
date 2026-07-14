@@ -141,10 +141,6 @@ def diff_java_trees(
     }
 
 
-# Message appended to every "report to Core" outcome.
-REPORT_TO_CORE = "This needs to be reported to Core."
-
-
 def decide_from_diff(
     customer: str | None,
     baseline: str | None,
@@ -168,10 +164,10 @@ def decide_from_diff(
     if customer is not None and baseline is not None and _norm_java(customer) == _norm_java(baseline):
         return {"remove": True, "reason": "Customer source unmodified (== current baseline) — take from target."}
     if target is None and baseline is None:
-        return {"remove": False, "reason": f"Baseline/target sources unavailable — cannot compare. {REPORT_TO_CORE}"}
+        return {"remove": False, "reason": "Baseline/target sources unavailable — cannot compare."}
     if target is None:
-        return {"remove": False, "reason": f"File absent in target sources — customer-specific. {REPORT_TO_CORE}"}
-    return {"remove": False, "reason": f"Customer source differs from target (customization not upstream). {REPORT_TO_CORE}"}
+        return {"remove": False, "reason": "File absent in target sources — customer-specific."}
+    return {"remove": False, "reason": "Customer source differs from target (customization not upstream)."}
 
 
 def decide_from_jira(

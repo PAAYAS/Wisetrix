@@ -488,6 +488,15 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
     # Remove). Lives outside plugins/IMPLEMENTATION, so it needs the git clone
     # root. Streams a "Comparing <jar>" progress event per jar. Best-effort.
     if (project.get("upgrade_mode") or "docker") == "weblogic":
+        # Drop any prior WEB-INF/lib rows (old jar-level rollups, the renamed
+        # __web_inf_lib bucket, stale per-file rows) so the table shows only the
+        # freshly computed per-file rows from this scan.
+        comp_results = {
+            k: v for k, v in comp_results.items()
+            if not str(k).startswith("WEB-INF/lib/")
+            and v.get("bucket") not in ("__web_inf_lib", "WEB-INF/lib")
+            and v.get("engine") != "weblogic-rule12"
+        }
         repo_root = (resolved.get("_git_metadata") or {}).get("clone_dir")
         if repo_root:
             loop = asyncio.get_running_loop()

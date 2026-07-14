@@ -45,6 +45,10 @@ _log = logging.getLogger(__name__)
 # read a large sources jar once connected.
 _HTTP_TIMEOUT = (10, 60)
 
+# Downloaded + extracted lib sources are cached here so the comparison inputs
+# can be inspected: ~/.wisetrix/web-inf_lib_cache/<artifactId>/<version>/<pkg>/*.java
+_LIB_CACHE_ROOT = Path.home() / ".wisetrix" / "web-inf_lib_cache"
+
 # JIRA projects that carry the authoritative Resolution + Fix Versions for a
 # WEB-INF/lib fix. A commit references a dev ticket (e.g. DOO-387) whose Issue
 # Links point at one of these. Overridable per project via "jira_fix_projects".
@@ -71,9 +75,12 @@ def _artifactory_auth() -> tuple | None:
     return None
 
 
-def _read_java_from_jar(url: str, auth: tuple | None) -> dict[str, str] | None:
+def _read_java_from_jar(
+    url: str, auth: tuple | None, extract_to: "Path | None" = None
+) -> dict[str, str] | None:
     """Download a ``-sources.jar`` and return {relpath: content} for its .java
-    files. Returns None on any failure (best-effort)."""
+    files. When ``extract_to`` is given, also write the .java tree there so the
+    comparison inputs can be inspected. Returns None on any failure."""
     if requests is None:
         return None
     try:
@@ -88,6 +95,11 @@ def _read_java_from_jar(url: str, auth: tuple | None) -> dict[str, str] | None:
                         out[name] = zf.read(name).decode("utf-8", errors="replace")
                     except Exception:  # noqa: BLE001
                         continue
+        if extract_to is not None and out:
+            for name, content in out.items():
+                dst = Path(extract_to) / name
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_text(content, encoding="utf-8")
         return out
     except Exception as e:  # noqa: BLE001
         _log.warning("rule12: failed to download/extract %s: %s", url, e)
@@ -125,10 +137,15 @@ def _list_artifactory_versions(
 
 
 def _resolve_target_sources(
-    art_base: str, artifact_id: str, target_version: str, auth: tuple | None
+    art_base: str,
+    artifact_id: str,
+    target_version: str,
+    auth: tuple | None,
+    cache_root: "Path | None" = None,
 ) -> tuple[str, dict[str, str]] | None:
     """Find and download the best target ``-sources.jar`` (target_version, or the
-    latest available <= target_version). Returns (version, java_files) or None."""
+    latest available <= target_version). Persists the chosen version's sources to
+    ``cache_root/<artifactId>/<version>`` when given. Returns (version, files)."""
     versions = _list_artifactory_versions(art_base, artifact_id, auth)
     # Candidate order: highest <= target first, then step down.
     candidates: list[str] = []
@@ -146,7 +163,10 @@ def _resolve_target_sources(
         candidates.append(target_version)
 
     for cand in candidates:
-        files = _read_java_from_jar(sources_url(art_base, artifact_id, cand), auth)
+        extract_to = (cache_root / artifact_id / cand) if cache_root else None
+        files = _read_java_from_jar(
+            sources_url(art_base, artifact_id, cand), auth, extract_to=extract_to
+        )
         if files:  # non-empty: has .java (skip 404s and empty/degenerate jars)
             return cand, files
     return None
@@ -299,8 +319,8 @@ def reconcile_web_inf_lib(
                 "output_rel": f"{L.WEB_INF_LIB_OUTPUT_PREFIX}/{d.name}",
                 "engine": "weblogic-rule12",
                 "decision": "",   # no decision — report to Core
-                "core_warning": "Unrecognized jar folder name. This needs to be reported to Core.",
-                "analysis": "Unparseable jar folder name.",
+                "core_warning": "Unrecognized jar folder name.",
+                "analysis": "Unrecognized jar folder name.",
             }
             continue
 
@@ -309,20 +329,29 @@ def reconcile_web_inf_lib(
         # Source jars for the diff fallback are downloaded lazily — once per jar,
         # only when a file has no JIRA fix evidence. Bind artifact_id/cur_ver as
         # defaults so the closure captures this iteration's values.
-        _srcs: dict[str, Any] = {"loaded": False, "baseline": None, "target": None, "tgt_ver": None}
+        _srcs: dict[str, Any] = {
+            "loaded": False, "baseline": None, "target": None, "tgt_ver": None,
+            "baseline_dir": None, "target_dir": None,
+        }
 
         def _ensure_sources(_aid=artifact_id, _cv=cur_ver) -> None:
             if _srcs["loaded"]:
                 return
             _srcs["loaded"] = True
             if nexus_base:
+                base_dir = _LIB_CACHE_ROOT / _aid / _cv
                 _srcs["baseline"] = _read_java_from_jar(
-                    sources_url(nexus_base, _aid, _cv), None
+                    sources_url(nexus_base, _aid, _cv), None, extract_to=base_dir
                 )
+                if _srcs["baseline"]:
+                    _srcs["baseline_dir"] = str(base_dir)
             if art_base and target_version:
-                pair = _resolve_target_sources(art_base, _aid, target_version, art_auth)
+                pair = _resolve_target_sources(
+                    art_base, _aid, target_version, art_auth, cache_root=_LIB_CACHE_ROOT
+                )
                 if pair:
                     _srcs["tgt_ver"], _srcs["target"] = pair
+                    _srcs["target_dir"] = str(_LIB_CACHE_ROOT / _aid / _srcs["tgt_ver"])
 
         # ── One comparison row PER .java file ────────────────────────────────
         for jf, folder_rel, repo_rel in jar_java[d]:
@@ -371,13 +400,18 @@ def reconcile_web_inf_lib(
             base_src = (_srcs["baseline"] or {}).get(folder_rel) if _srcs["baseline"] else None
             tgt_src = (_srcs["target"] or {}).get(folder_rel) if _srcs["target"] else None
             ddec = decide_from_diff(cust_src, base_src, tgt_src)
+            diff_meta = {
+                "basis": "diff",
+                "target_version": _srcs["tgt_ver"],
+                "baseline_dir": _srcs["baseline_dir"],   # cached sources on disk
+                "target_dir": _srcs["target_dir"],
+            }
             if ddec["remove"]:
                 results[fkey] = {
                     **fbase,
+                    **diff_meta,
                     "decision": "Remove",
                     "forced_decision": "Remove",
-                    "basis": "diff",
-                    "target_version": _srcs["tgt_ver"],
                     "analysis": ddec["reason"],
                 }
             else:
@@ -385,9 +419,8 @@ def reconcile_web_inf_lib(
                 # surface a "report to Core" note, mirroring the DB warning.
                 results[fkey] = {
                     **fbase,
+                    **diff_meta,
                     "decision": "",
-                    "basis": "diff",
-                    "target_version": _srcs["tgt_ver"],
                     "core_warning": ddec["reason"],
                     "analysis": ddec["reason"],
                 }
