@@ -37,9 +37,29 @@ from upgrade_api.scan_util import resolve_project_paths
 from upgrade_api.state import load_projects
 from upgrade_lib.claude_client import UpgradeClient
 from upgrade_lib.quality.quality_gate import QualityGate
+from upgrade_api.weblogic_merge import perform_weblogic_merge
 
 
 router = APIRouter(prefix="/projects/{project_id}/merges", tags=["merges"])
+
+
+def _is_weblogic(project: dict) -> bool:
+    return (project.get("upgrade_mode") or "docker") == "weblogic"
+
+
+def _pending_decisions(project: dict) -> set[str]:
+    """Which decisions produce delivery output for this mode.
+
+    Docker: only Merge (Retain artifacts stay in the customer's Docker repo).
+    WebLogic: Merge + Retain — a Docker delivery is assembled from a
+    differently laid-out source, so Retain artifacts must be copied too.
+    """
+    return {"Merge", "Retain"} if _is_weblogic(project) else {"Merge"}
+
+
+def _merge_fn(project: dict):
+    """The per-artifact merge function for this project's upgrade mode."""
+    return perform_weblogic_merge if _is_weblogic(project) else perform_merge
 
 
 def _project_or_404(project_id: str) -> dict:
@@ -83,13 +103,14 @@ def _zip_filename_header(name: str) -> dict:
 
 @router.get("")
 def list_merges(project_id: str) -> dict:
-    _project_or_404(project_id)
+    project = _project_or_404(project_id)
     merges = load_json(merge_report_path(project_id), {})
     comp = load_json(comparison_path(project_id), {})
+    wanted = _pending_decisions(project)
     pending = {
         k: v
         for k, v in comp.items()
-        if v.get("decision") == "Merge" and k not in merges
+        if v.get("decision") in wanted and k not in merges
     }
     return {
         "pending": pending,
@@ -118,10 +139,11 @@ async def merge_one(project_id: str, key: str) -> dict:
 
     client = UpgradeClient()
     qg = QualityGate()
+    merge_fn = _merge_fn(project)
 
     # Claude work is blocking — run in thread so we don't stall the event loop.
     record = await anyio.to_thread.run_sync(
-        lambda: perform_merge(
+        lambda: merge_fn(
             key,
             entry,
             source_root,
@@ -231,10 +253,11 @@ async def _merge_stream(
             return
         pending_items = [(k, comp[k]) for k in only_keys]
     else:
+        wanted = _pending_decisions(project)
         pending_items = [
             (k, v)
             for k, v in comp.items()
-            if v.get("decision") == "Merge" and k not in merges
+            if v.get("decision") in wanted and k not in merges
         ]
     total = len(pending_items)
     yield {"event": "scan", "data": json.dumps({"total": total})}
@@ -250,6 +273,7 @@ async def _merge_stream(
 
     client = UpgradeClient()
     qg = QualityGate()
+    merge_fn = _merge_fn(project)
     succeeded = 0
     failed: list[dict] = []
     merged_keys: list[str] = []
@@ -284,7 +308,7 @@ async def _merge_stream(
         async def _run(k: str = key, e: dict = entry) -> dict:
             try:
                 rec = await anyio.to_thread.run_sync(
-                    lambda: perform_merge(
+                    lambda: merge_fn(
                         k,
                         e,
                         source_root,

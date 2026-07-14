@@ -191,7 +191,14 @@ def perform_merge(
 
     merge_start = time.monotonic()
     emit("reading", key=key)
-    customer_files = read_artifact_files(source_root / bucket / rel)
+    # WebLogic entries carry an explicit source_abs (the real customer dir,
+    # whose path differs from bucket/rel after $->/ + redirects). Docker entries
+    # omit it → fall back to the standard layout.
+    customer_dir = (
+        Path(entry["source_abs"]) if entry.get("source_abs")
+        else source_root / bucket / rel
+    )
+    customer_files = read_artifact_files(customer_dir)
     system_files = read_artifact_files(target_root / system_rel)
 
     # ── Rules 3 & 4: BASE_*_NAME redirect ────────────────────────────────────
@@ -301,7 +308,12 @@ def perform_merge(
         _log.warning("[merge] deterministic fill failed for %s: %s", key, exc)
         filled = []
 
-    out_dir = out_root / bucket / rel
+    # WebLogic entries carry an explicit output_rel (app_root-relative path in
+    # the Docker delivery layout). Docker entries omit it → out_root/bucket/rel.
+    out_dir = (
+        out_root / entry["output_rel"] if entry.get("output_rel")
+        else out_root / bucket / rel
+    )
     write_artifact_files(out_dir, artifact_files)
 
     # Store Claude's analysis docs separately — not part of the git check-in artifact.

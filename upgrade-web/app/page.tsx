@@ -20,7 +20,7 @@ export default function Home() {
 
         <section className="mt-24 max-w-3xl">
           <h1 className="text-balance bg-gradient-to-br from-foreground via-foreground to-foreground/60 bg-clip-text text-5xl font-semibold leading-tight tracking-tight text-transparent sm:text-6xl">
-            GTM Docker-to-Docker upgrades,
+            GTM Docker- &amp; WebLogic-to-Docker upgrades,
             <br />
             <span className="bg-gradient-to-r from-primary to-fuchsia-400 bg-clip-text text-transparent">
               with AI automation ready.

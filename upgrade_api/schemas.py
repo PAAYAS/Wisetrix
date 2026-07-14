@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 SourceType = Literal["git", "local"]
 TargetType = Literal["artifactory", "local"]
 BaselineType = Literal["artifactory", "local", "none"]
+UpgradeMode = Literal["docker", "weblogic"]
 
 
 class ProjectConfig(BaseModel):
@@ -18,6 +19,10 @@ class ProjectConfig(BaseModel):
     Mirrors the dict that Streamlit writes to `projects.json` so the two
     UIs remain bit-for-bit interoperable.
     """
+
+    # Upgrade mode — selects the scan/compare front end. "docker" (default)
+    # scans app_root/repos; "weblogic" scans a plugins/IMPLEMENTATION tree.
+    upgrade_mode: UpgradeMode = "docker"
 
     source_type: SourceType = "git"
     target_type: TargetType = "artifactory"

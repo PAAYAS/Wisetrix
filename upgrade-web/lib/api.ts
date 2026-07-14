@@ -81,8 +81,14 @@ export class ApiError extends Error {
 export type SourceType = "git" | "local";
 export type TargetType = "artifactory" | "local";
 export type BaselineType = "artifactory" | "local" | "none";
+export type UpgradeMode = "docker" | "weblogic";
 
 export interface ProjectConfig {
+  // upgrade mode — how the customer's source is laid out.
+  // "docker" (default) scans app_root/repos; "weblogic" scans a WebLogic
+  // plugins/IMPLEMENTATION deployment.
+  upgrade_mode?: UpgradeMode | null;
+
   source_type: SourceType;
   target_type: TargetType;
   baseline_type: BaselineType;
@@ -589,6 +595,7 @@ export const api = {
 };
 
 export const emptyProject = (): ProjectConfig => ({
+  upgrade_mode: "docker",
   source_type: "git",
   target_type: "artifactory",
   baseline_type: "none",

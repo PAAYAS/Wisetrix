@@ -159,6 +159,91 @@ class JiraClient:
             logger.error(f"Failed to fetch {issue_key}: {e}")
             return None
 
+    def get_resolution_and_fix_versions(self, issue_key: str) -> dict[str, Any] | None:
+        """Fetch an issue's Resolution + Fix Versions (for Rule-12 JAR reconcile).
+
+        Returns {key, resolution, fix_versions:[...], status, issue_type, summary}
+        or None if unavailable/disabled.
+        """
+        jira = self._connect()
+        if jira is None:
+            return None
+        try:
+            data = jira.issue(
+                issue_key,
+                fields="resolution,fixVersions,status,issuetype,summary",
+            )
+            if not isinstance(data, dict):
+                return None
+            fields = data.get("fields") or {}
+            if not isinstance(fields, dict):
+                fields = {}
+            resolution = fields.get("resolution")
+            resolution_name = (
+                resolution.get("name") if isinstance(resolution, dict) else None
+            )
+            fix_versions = []
+            for fv in fields.get("fixVersions") or []:
+                if isinstance(fv, dict) and fv.get("name"):
+                    fix_versions.append(fv["name"])
+            status = fields.get("status")
+            itype = fields.get("issuetype")
+            return {
+                "key": data.get("key", issue_key),
+                "resolution": resolution_name,
+                "fix_versions": fix_versions,
+                "status": status.get("name") if isinstance(status, dict) else None,
+                "issue_type": itype.get("name") if isinstance(itype, dict) else None,
+                "summary": fields.get("summary", "") or "",
+            }
+        except Exception as e:
+            logger.error(f"Failed to fetch resolution/fixVersions for {issue_key}: {e}")
+            return None
+
+    def get_linked_issue_keys(
+        self,
+        issue_key: str,
+        project_keys: set[str] | None = None,
+    ) -> list[str]:
+        """Return the keys of issues linked to *issue_key* via its Issue Links.
+
+        Follows every link type (Clones, is related to, etc.), reading both the
+        inward and outward side. When ``project_keys`` is given (e.g.
+        {"TA", "PDSUPPORT"}), only keys in those JIRA projects are returned.
+
+        Used by Rule 12: a commit references a dev ticket (e.g. DOO-387) whose
+        Issue Links point at the TA/PDSUPPORT ticket carrying the real
+        Resolution + Fix Versions.
+        """
+        jira = self._connect()
+        if jira is None:
+            return []
+        try:
+            data = jira.issue(issue_key, fields="issuelinks")
+            if not isinstance(data, dict):
+                return []
+            fields = data.get("fields") or {}
+            links = fields.get("issuelinks") or []
+            keys: list[str] = []
+            for link in links:
+                if not isinstance(link, dict):
+                    continue
+                for side in ("inwardIssue", "outwardIssue"):
+                    linked = link.get(side)
+                    if isinstance(linked, dict) and linked.get("key"):
+                        keys.append(linked["key"])
+            if project_keys:
+                keys = [
+                    k for k in keys
+                    if k.split("-", 1)[0] in project_keys
+                ]
+            # de-dupe, preserve order
+            seen: set[str] = set()
+            return [k for k in keys if not (k in seen or seen.add(k))]
+        except Exception as e:
+            logger.error(f"Failed to fetch issue links for {issue_key}: {e}")
+            return []
+
     def get_issue_comments(self, issue_key: str) -> list[dict[str, str]]:
         """
         Fetch comments for a JIRA issue.

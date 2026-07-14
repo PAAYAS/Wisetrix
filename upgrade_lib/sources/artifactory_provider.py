@@ -19,6 +19,7 @@ import time
 import zipfile
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
 
 try:
     import requests
@@ -81,6 +82,15 @@ def _version_from_url(url: str) -> str:
     return hashlib.sha256(url.encode()).hexdigest()[:8]
 
 
+def _same_host(a: str, b: str) -> bool:
+    """True if two URLs share the same host. Used to decide whether the
+    Artifactory credentials apply to a given download."""
+    try:
+        return urlparse(a).hostname == urlparse(b).hostname
+    except Exception:
+        return False
+
+
 def _ui_to_api_url(url: str) -> str:
     """Convert Artifactory UI URL to REST API / download URL.
 
@@ -104,6 +114,14 @@ def _find_jar_url(base_url: str, auth: tuple | None = None) -> str:
         raise ImportError("requests is required for Artifactory integration")
 
     base_url = base_url.rstrip("/")
+
+    # Direct file link (e.g. a Nexus release jar, as used for the WebLogic
+    # baseline): the URL already points at the artifact, not a directory to
+    # list. Use it as-is — the download step surfaces a clear HTTP error if it
+    # doesn't exist. No-op for Artifactory directory URLs (they don't end .jar).
+    if base_url.lower().endswith((".jar", ".zip")):
+        return base_url
+
     api_base = _ui_to_api_url(base_url)
     version = _version_from_url(base_url)
 
@@ -200,8 +218,13 @@ class ArtifactoryProvider(SourceProvider):
         baseline_url = config.get("baseline_url") or config.get("baseline_artifactory_url", "")
         if baseline_url:
             baseline_version = config.get("baseline_version", _version_from_url(baseline_url))
+            # The baseline may live on a different server than the target (e.g. a
+            # public Nexus repo for WebLogic baselines) that rejects the
+            # Artifactory credentials with a 401. Only send credentials when the
+            # baseline is on the same host the credentials belong to.
+            baseline_auth = auth if _same_host(baseline_url, target_url) else None
             baseline_path = self._download_and_extract(
-                baseline_url, baseline_version, auth, progress_cb=progress_cb
+                baseline_url, baseline_version, baseline_auth, progress_cb=progress_cb
             )
 
         return ResolvedSource(

@@ -86,6 +86,27 @@ def scan_artifacts(source_root: Path, project_id: str = "SOURCE") -> list[dict]:
     return artifacts
 
 
+def scan_source(
+    source_root: Path,
+    project: dict[str, Any],
+    project_id: str = "SOURCE",
+) -> list[dict]:
+    """Scan the source tree using the scanner appropriate for the project's
+    upgrade mode.
+
+    - ``upgrade_mode == "weblogic"`` -> WebLogic scanner (routes a WebLogic
+      deployment into the same descriptor shape, with extra bridge fields).
+    - anything else (default "docker") -> the standard Docker scanner.
+
+    This is the single gate that keeps the WebLogic path out of the Docker flow.
+    """
+    if (project.get("upgrade_mode") or "docker") == "weblogic":
+        from upgrade_lib.weblogic.scan import scan_weblogic_artifacts
+
+        return scan_weblogic_artifacts(source_root, project_id=project_id)
+    return scan_artifacts(source_root, project_id=project_id)
+
+
 # In-memory TTL cache for resolved paths. Avoids re-running fetch/pull for
 # every endpoint call. Invalidated automatically when the project config
 # changes (the key embeds a hash of the relevant fields).
@@ -94,6 +115,7 @@ _RESOLVE_CACHE_LOCK = threading.Lock()
 _RESOLVE_TTL_SECONDS = 300  # 5 minutes
 
 _CACHE_KEYS = (
+    "upgrade_mode",
     "source_type",
     "git_url",
     "git_branch",

@@ -13,6 +13,7 @@ import {
   type ProjectConfig,
   type SourceType,
   type TargetType,
+  type UpgradeMode,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,6 +35,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+// Default source subpaths per upgrade mode.
+const DOCKER_SUBPATH = "client_delivery/src/main/resources/app_root/repos";
+const WEBLOGIC_SUBPATH = "plugins/IMPLEMENTATION";
+
 interface ProjectFormProps {
   mode: "create" | "edit";
   initialId?: string;
@@ -54,6 +59,25 @@ export function ProjectForm({ mode, initialId, initialConfig }: ProjectFormProps
     key: K,
     value: ProjectConfig[K],
   ) => setConfig((c) => ({ ...c, [key]: value }));
+
+  // Switching upgrade mode also swaps in that mode's default source subpath —
+  // but only when the current subpath is empty or still the other mode's
+  // default, so a customised subpath is never clobbered.
+  const onModeChange = (mode: UpgradeMode) =>
+    setConfig((c) => {
+      const cur = c.source_subpath ?? "";
+      const isDefault =
+        cur === "" || cur === DOCKER_SUBPATH || cur === WEBLOGIC_SUBPATH;
+      return {
+        ...c,
+        upgrade_mode: mode,
+        source_subpath: isDefault
+          ? mode === "weblogic"
+            ? WEBLOGIC_SUBPATH
+            : DOCKER_SUBPATH
+          : cur,
+      };
+    });
 
   const onSave = async () => {
     if (mode === "create" && !id.trim()) {
@@ -118,6 +142,24 @@ export function ProjectForm({ mode, initialId, initialConfig }: ProjectFormProps
               </p>
             )}
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Upgrade mode</CardTitle>
+          <CardDescription>
+            How the customer&apos;s source is laid out.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <RadioGroup
+            value={config.upgrade_mode ?? "docker"}
+            onValueChange={(v) => onModeChange(v as UpgradeMode)}
+          >
+            <RadioRow value="docker" label="Docker → Docker" />
+            <RadioRow value="weblogic" label="WebLogic → Docker" />
+          </RadioGroup>
         </CardContent>
       </Card>
 

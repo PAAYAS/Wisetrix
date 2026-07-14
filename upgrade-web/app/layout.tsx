@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Wisetrix",
-  description: "Wisetrix — GTM Docker-to-Docker upgrade tool",
+  description: "Wisetrix — GTM Docker & WebLogic to Docker upgrade tool",
 };
 
 export default function RootLayout({

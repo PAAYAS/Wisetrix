@@ -63,10 +63,11 @@ from upgrade_api.paths import (
     risk_path,
     save_json,
 )
-from upgrade_api.scan_util import resolve_project_paths, scan_artifacts
+from upgrade_api.scan_util import resolve_project_paths, scan_source
 from upgrade_api.state import load_projects
 from upgrade_lib.compare import apply_business_rules, compare_artifact_local
 from upgrade_lib.quality.risk_scorer import RiskScorer
+from upgrade_lib.weblogic.compare import forced_result
 
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["scan"])
@@ -138,7 +139,7 @@ async def list_artifacts(project_id: str) -> dict:
 
     try:
         artifacts = await anyio.to_thread.run_sync(
-            lambda: scan_artifacts(source_root, project_id=project_id)
+            lambda: scan_source(source_root, project, project_id=project_id)
         )
     except Exception as e:
         logger.error("list_artifacts: scan failed for %s: %s", project_id, e, exc_info=True)
@@ -290,7 +291,7 @@ async def _artifacts_stream(project_id: str) -> AsyncIterator[dict]:
     yield _phase("scan", "Scanning artifact tree…")
     try:
         artifacts = await anyio.to_thread.run_sync(
-            lambda: scan_artifacts(source_root, project_id=project_id)
+            lambda: scan_source(source_root, project, project_id=project_id)
         )
     except Exception as e:
         logger.error(
@@ -386,7 +387,7 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
         return
 
     yield {"event": "phase", "data": json.dumps({"phase": "scan"})}
-    artifacts = scan_artifacts(source_root, project_id=project_id)
+    artifacts = scan_source(source_root, project, project_id=project_id)
     total = len(artifacts)
     yield {
         "event": "scan",
@@ -407,18 +408,27 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
         key = art["source_rel"]
         rel = art["rel_path"]
         bucket = art["bucket"]
-        customer_dir = source_root / bucket / rel
 
-        # ── __env_specific: strip {ENV}/{CUSTOMER}/ prefix ───────────────────
-        # rel_path for env_specific is  {ENV}/{CUSTOMER}/{category}/…/{name}
-        # e.g.  DEV/AGCO/datasets/REPORT/MY_REPORT
-        # SYSTEM has no  DEV/AGCO/ prefix → strip first 2 segments to find
-        # the real SYSTEM counterpart at  target_root/datasets/REPORT/MY_REPORT
-        system_rel = rel   # used for SYSTEM lookup; equals rel for normal artifacts
-        if bucket.startswith("__env_specific"):
+        # ── Source directory ─────────────────────────────────────────────────
+        # WebLogic descriptors carry an explicit source_abs (the real customer
+        # dir, whose on-disk path differs from bucket/rel after $->/ + redirects).
+        # Docker descriptors omit it → fall back to the standard layout.
+        if art.get("source_abs"):
+            customer_dir = Path(art["source_abs"])
+        else:
+            customer_dir = source_root / bucket / rel
+
+        # ── SYSTEM/baseline lookup path ──────────────────────────────────────
+        # WebLogic descriptors carry an explicit, already-normalized system_rel.
+        # Docker env_specific strips the {ENV}/{CUSTOMER}/ prefix; normal Docker
+        # artifacts use rel as-is.
+        if art.get("system_rel"):
+            system_rel = art["system_rel"]
+        elif bucket.startswith("__env_specific"):
             parts = Path(rel).parts
-            if len(parts) >= 3:
-                system_rel = "/".join(parts[2:])   # strip ENV + CUSTOMER
+            system_rel = "/".join(parts[2:]) if len(parts) >= 3 else rel
+        else:
+            system_rel = rel
 
         sys_dir = target_root / system_rel
 
@@ -431,14 +441,27 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
             "source_rel": key,
             "decided_at": datetime.now(timezone.utc).isoformat(),
         }
+        # Carry WebLogic bridge fields through to the merge stage (absent for
+        # Docker artifacts, so Docker merge behaviour is unchanged).
+        for _f in ("source_abs", "output_rel", "copy_as_is", "forced_decision"):
+            if art.get(_f) is not None:
+                meta[_f] = art[_f]
 
         try:
-            # Pass system_rel so BASE redirect and category detection work on the
-            # real artifact path, not the  DEV/AGCO/…  env_specific prefix.
-            result = compare_artifact_local(
-                customer_dir, sys_dir, system_rel,
-                target_root=target_root, baseline_root=baseline_root,
-            )
+            forced = art.get("forced_decision")
+            if forced:
+                # WebLogic routing fixes this artifact's decision (rules 4/5/6):
+                # copy-as-is Retain or Remove — no 3-way compare.
+                result = forced_result(
+                    forced, customer_dir, copy_as_is=bool(art.get("copy_as_is"))
+                )
+            else:
+                # Pass system_rel so BASE redirect and category detection work on
+                # the real artifact path, not the env_specific / WebLogic prefix.
+                result = compare_artifact_local(
+                    customer_dir, sys_dir, system_rel,
+                    target_root=target_root, baseline_root=baseline_root,
+                )
             comp_results[key] = {**meta, **result}
             decision = result.get("decision", "?")
         except Exception as e:
@@ -459,6 +482,30 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
         }
         # cooperative yield so the SSE client can render incrementally
         await asyncio.sleep(0)
+
+    # ── Rule 12 (WebLogic): WEB-INF/lib source-JAR reconciliation ────────────
+    # Lives outside plugins/IMPLEMENTATION, so it needs the git clone root.
+    # Best-effort: never let it break the scan.
+    if (project.get("upgrade_mode") or "docker") == "weblogic":
+        repo_root = (resolved.get("_git_metadata") or {}).get("clone_dir")
+        if repo_root:
+            yield {"event": "phase", "data": json.dumps({"phase": "rule12_jars"})}
+            try:
+                from upgrade_api.weblogic_jars import reconcile_web_inf_lib
+
+                jar_results = await anyio.to_thread.run_sync(
+                    lambda: reconcile_web_inf_lib(repo_root, project)
+                )
+                comp_results.update(jar_results)
+                logger.info(
+                    "compare_stream: rule12 added %d WEB-INF/lib jar(s) for %s",
+                    len(jar_results), project_id,
+                )
+            except Exception as e:
+                logger.error(
+                    "compare_stream: rule12 failed for %s: %s",
+                    project_id, e, exc_info=True,
+                )
 
     yield {"event": "phase", "data": json.dumps({"phase": "rollup"})}
     comp_results = apply_business_rules(comp_results, target_root=target_root)
