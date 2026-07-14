@@ -75,9 +75,9 @@ WEB_INF_LIB_REL = "app_root/install/app_war_src/WEB-INF/lib"
 # retained pending Core review.
 WEB_INF_LIB_OUTPUT_PREFIX = "install/app_war_src/WEB-INF/lib"
 
-# Synthetic bucket so lib jars group together and never trigger the
-# windowdefs/datasets business rules (which are scoped per bucket).
-WEB_INF_LIB_BUCKET = "__web_inf_lib"
+# Bucket label for lib artifacts (displayed in the UI). Distinct from the repos
+# buckets, so it never triggers the windowdefs/datasets business rules.
+WEB_INF_LIB_BUCKET = "WEB-INF/lib"
 
 
 # --------------------------------------------------------------------------- #

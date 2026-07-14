@@ -300,7 +300,11 @@ export default function ScanPage({ params }: { params: { id: string } }) {
     const list = Object.entries(comparison).map(([key, r]) => ({ key, ...r }));
     return list
       .filter((r) =>
-        decisionFilter.size === 0 ? true : decisionFilter.has(r.decision),
+        decisionFilter.size === 0
+          ? true
+          : r.decision
+            ? decisionFilter.has(r.decision)
+            : false,
       )
       .filter((r) =>
         riskFilter.size === 0
@@ -628,6 +632,11 @@ export default function ScanPage({ params }: { params: { id: string } }) {
                             ⚠ DB action required before upgrade
                           </div>
                         )}
+                        {r.core_warning && (
+                          <div className="mt-1 inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                            ⚠ This needs to be reported to Core
+                          </div>
+                        )}
                         {r.no_customer_content_note && (
                           <div className="mt-1 inline-flex items-center gap-1 rounded bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-950 dark:text-blue-300">
                             ℹ No customer-specific content — removed, taken from 26.2 core
@@ -714,9 +723,13 @@ function DecisionBadge({
   decision,
   count,
 }: {
-  decision: Decision;
+  decision: Decision | "";
   count?: number;
 }) {
+  // Blank decision (rule-12 "report to Core") — nothing to badge.
+  if (!decision) {
+    return <span className="text-muted-foreground">—</span>;
+  }
   const variant =
     decision === "Merge"
       ? "default"
@@ -747,6 +760,7 @@ function RiskBadge({ level, count }: { level: RiskLevel; count?: number }) {
 function countByDecision(comparison: ComparisonMap) {
   const out: Partial<Record<Decision, number>> = {};
   for (const r of Object.values(comparison) as ComparisonResult[]) {
+    if (!r.decision) continue;   // blank = rule-12 "report to Core"
     out[r.decision] = (out[r.decision] ?? 0) + 1;
   }
   return out;

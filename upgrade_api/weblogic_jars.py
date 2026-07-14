@@ -29,6 +29,7 @@ except ImportError:  # pragma: no cover
 
 from upgrade_lib.weblogic import layout as L
 from upgrade_lib.weblogic.jar_reconcile import (
+    decide_from_diff,
     decide_from_jira,
     diff_java_trees,
     parse_jar_folder,
@@ -39,7 +40,10 @@ from upgrade_lib.weblogic.jar_reconcile import (
 
 _log = logging.getLogger(__name__)
 
-_HTTP_TIMEOUT = 60
+# (connect, read) timeouts: fail fast when a source server is unreachable so a
+# down Nexus/Artifactory can't stall the scan for minutes, but allow time to
+# read a large sources jar once connected.
+_HTTP_TIMEOUT = (10, 60)
 
 # JIRA projects that carry the authoritative Resolution + Fix Versions for a
 # WEB-INF/lib fix. A commit references a dev ticket (e.g. DOO-387) whose Issue
@@ -162,12 +166,30 @@ def _read_customer_java(folder: Path) -> dict[str, str]:
     return out
 
 
-def reconcile_web_inf_lib(repo_root: str | Path, project: dict) -> dict[str, Any]:
+def reconcile_web_inf_lib(
+    repo_root: str | Path,
+    project: dict,
+    progress_cb: "Any" = None,
+) -> dict[str, Any]:
     """Return comparison entries (keyed by source_rel) for each WEB-INF/lib jar.
+
+    The decision is made **per ``.java`` file**: each file's git commit → pivot
+    ticket → linked TA/PDSUPPORT ticket → Resolution=Fixed with a Fix Version in
+    ``(curVer, targetVer]`` → that file is Removed. Per-file decisions roll up to
+    the jar (all Removed → jar Remove; otherwise Retain, copying only the kept
+    files). ``progress_cb(phase, data)`` is called once per jar so the UI can show
+    "Comparing <jar>".
 
     ``repo_root`` is the git clone dir (WEB-INF/lib lives outside the
     ``plugins/IMPLEMENTATION`` source_root).
     """
+    def emit(phase: str, **data: Any) -> None:
+        if progress_cb is not None:
+            try:
+                progress_cb(phase, data)
+            except Exception:  # noqa: BLE001
+                pass
+
     results: dict[str, Any] = {}
     lib_dir = Path(repo_root) / L.WEB_INF_LIB_REL
     if not lib_dir.is_dir():
@@ -185,24 +207,38 @@ def reconcile_web_inf_lib(repo_root: str | Path, project: dict) -> dict[str, Any
     branch = project.get("git_branch") or "main"
     fix_projects = set(project.get("jira_fix_projects") or _DEFAULT_FIX_PROJECTS)
 
-    # Repository bases for source-jar downloads (rule 12.2 diff).
+    # Repository bases for the source-jar download fallback (rule 12.2).
     nexus_base = repo_base(project["baseline_url"]) if project.get("baseline_url") else ""
     art_base = repo_base(project["artifactory_url"]) if project.get("artifactory_url") else ""
     art_auth = _artifactory_auth()
 
-    # ── git commit → JIRA keys for the lib folders (best-effort) ─────────────
+    # ── Enumerate every .java file under every jar folder ─────────────────────
+    # jar_java[d] = [(java_path, folder_rel, repo_rel), ...]
+    jar_java: dict[Path, list[tuple[Path, str, str]]] = {}
+    all_repo_rels: list[str] = []
+    for d in jar_folders:
+        items: list[tuple[Path, str, str]] = []
+        for jf in sorted(d.rglob("*.java")):
+            if not jf.is_file():
+                continue
+            folder_rel = jf.relative_to(d).as_posix()
+            repo_rel = f"{L.WEB_INF_LIB_REL}/{d.name}/{folder_rel}"
+            items.append((jf, folder_rel, repo_rel))
+            all_repo_rels.append(repo_rel)
+        jar_java[d] = items
+
+    # ── One git history walk → per-file commit JIRA keys ─────────────────────
     git_hits: dict[str, set[str]] = {}
-    rel_paths = [f"{L.WEB_INF_LIB_REL}/{d.name}" for d in jar_folders]
     try:
         from upgrade_lib.sources.git_provider import GitProvider
 
         git_hits = GitProvider().extract_jira_keys_for_paths(
-            git_url, branch, rel_paths
+            git_url, branch, all_repo_rels
         )
     except Exception as e:  # noqa: BLE001 — evidence gathering is best-effort
-        _log.warning("rule12: git JIRA scan failed (%s); falling back to warnings", e)
+        _log.warning("rule12: git JIRA scan failed (%s); files fall back to warnings", e)
 
-    # ── JIRA client (safe no-op when disabled) ───────────────────────────────
+    # ── JIRA client (safe no-op when disabled) + caches ──────────────────────
     try:
         from upgrade_lib.jira.jira_client import JiraClient
 
@@ -211,136 +247,149 @@ def reconcile_web_inf_lib(repo_root: str | Path, project: dict) -> dict[str, Any
         _log.warning("rule12: JIRA client init failed (%s)", e)
         jira = None
 
-    for d in jar_folders:
-        key = f"WEB-INF/lib/{d.name}"
-        out_rel = f"{L.WEB_INF_LIB_OUTPUT_PREFIX}/{d.name}"
-        base = {
-            "bucket": L.WEB_INF_LIB_BUCKET,
-            "category": "WEB-INF/lib",
-            "name": d.name,
-            "rel_path": d.name,
-            "source_rel": key,
-            "source_abs": str(d),
-            "output_rel": out_rel,
-            "engine": "weblogic-rule12",
-        }
+    jira_on = jira is not None and getattr(jira, "enabled", False)
+    _link_cache: dict[str, list[str]] = {}   # commit key → linked fix-ticket keys
+    _info_cache: dict[str, dict | None] = {}  # ticket key → resolution/fixVersions
+
+    def _fix_tickets(commit_keys: list[str]) -> list[str]:
+        """Commit keys → the TA/PDSUPPORT tickets to check (self if already in a
+        fix project, plus linked tickets), cached per commit key."""
+        out: list[str] = []
+        seen: set[str] = set()
+        for ck in commit_keys:
+            if _project_of(ck) in fix_projects and ck not in seen:
+                seen.add(ck)
+                out.append(ck)
+            if ck not in _link_cache:
+                _link_cache[ck] = (
+                    jira.get_linked_issue_keys(ck, fix_projects) if jira_on else []
+                )
+            for lk in _link_cache[ck]:
+                if lk not in seen:
+                    seen.add(lk)
+                    out.append(lk)
+        return out
+
+    def _infos(keys: list[str]) -> list[dict]:
+        infos: list[dict] = []
+        for k in keys:
+            if k not in _info_cache:
+                _info_cache[k] = (
+                    jira.get_resolution_and_fix_versions(k) if jira_on else None
+                )
+            if _info_cache[k]:
+                infos.append(_info_cache[k])
+        return infos
+
+    total = len(jar_folders)
+    for i, d in enumerate(jar_folders, 1):
+        # Progress reads "Comparing <folder>" (the jar folder name).
+        emit(f"Comparing {d.name}", jar=d.name, index=i, total=total)
 
         parsed = parse_jar_folder(d.name)
         if not parsed:
+            key = f"WEB-INF/lib/{d.name}"
             results[key] = {
-                **base,
-                "decision": "Retain",
-                "forced_decision": "Retain",
-                "copy_as_is": True,
-                "core_warning": "Unrecognized jar folder name — kept for Core review.",
-                "analysis": "Unparseable jar folder name; retained pending Core review.",
+                "bucket": L.WEB_INF_LIB_BUCKET,
+                "category": d.name,
+                "name": d.name,
+                "rel_path": d.name,
+                "source_rel": key,
+                "source_abs": str(d),
+                "output_rel": f"{L.WEB_INF_LIB_OUTPUT_PREFIX}/{d.name}",
+                "engine": "weblogic-rule12",
+                "decision": "",   # no decision — report to Core
+                "core_warning": "Unrecognized jar folder name. This needs to be reported to Core.",
+                "analysis": "Unparseable jar folder name.",
             }
             continue
 
         artifact_id, cur_ver = parsed
-        # Commit tickets for this jar folder (the pivots, e.g. DOO-387).
-        commit_keys = sorted(git_hits.get(f"{L.WEB_INF_LIB_REL}/{d.name}", set()))
 
-        # Resolve the authoritative TA/PDSUPPORT tickets: a commit ticket links
-        # (Clones / is related to / …) to the TA/PDSUPPORT ticket that carries
-        # Resolution + Fix Versions. A commit key already in a fix project is
-        # itself a candidate; each commit key's links are also followed.
-        fix_ticket_keys: list[str] = []
-        if jira is not None and getattr(jira, "enabled", False):
-            seen: set[str] = set()
-            for ck in commit_keys:
-                if _project_of(ck) in fix_projects and ck not in seen:
-                    seen.add(ck)
-                    fix_ticket_keys.append(ck)
-                for linked in jira.get_linked_issue_keys(ck, fix_projects):
-                    if linked not in seen:
-                        seen.add(linked)
-                        fix_ticket_keys.append(linked)
+        # Source jars for the diff fallback are downloaded lazily — once per jar,
+        # only when a file has no JIRA fix evidence. Bind artifact_id/cur_ver as
+        # defaults so the closure captures this iteration's values.
+        _srcs: dict[str, Any] = {"loaded": False, "baseline": None, "target": None, "tgt_ver": None}
 
-        jira_infos: list[dict] = []
-        for fk in fix_ticket_keys:
-            info = jira.get_resolution_and_fix_versions(fk)
-            if info:
-                jira_infos.append(info)
+        def _ensure_sources(_aid=artifact_id, _cv=cur_ver) -> None:
+            if _srcs["loaded"]:
+                return
+            _srcs["loaded"] = True
+            if nexus_base:
+                _srcs["baseline"] = _read_java_from_jar(
+                    sources_url(nexus_base, _aid, _cv), None
+                )
+            if art_base and target_version:
+                pair = _resolve_target_sources(art_base, _aid, target_version, art_auth)
+                if pair:
+                    _srcs["tgt_ver"], _srcs["target"] = pair
 
-        decision = (
-            decide_from_jira(jira_infos, cur_ver, target_version)
-            if target_version else None
-        )
-
-        if decision:
-            results[key] = {
-                **base,
-                "decision": "Remove",
-                "forced_decision": "Remove",
-                "commit_tickets": commit_keys,
-                "fix_tickets": fix_ticket_keys,
-                "jira_key": decision["jira_key"],
-                "fix_version": decision["fix_version"],
+        # ── One comparison row PER .java file ────────────────────────────────
+        for jf, folder_rel, repo_rel in jar_java[d]:
+            fkey = f"WEB-INF/lib/{d.name}/{folder_rel}"
+            commit_keys = sorted(git_hits.get(repo_rel, set()))
+            fix_keys = _fix_tickets(commit_keys)
+            infos = _infos(fix_keys)
+            fbase = {
+                "bucket": L.WEB_INF_LIB_BUCKET,
+                "category": d.name,                       # the jar folder
+                "name": folder_rel.rsplit("/", 1)[-1],    # the .java filename
+                "rel_path": f"{d.name}/{folder_rel}",
+                "source_rel": fkey,
+                "source_abs": str(jf),
+                "output_rel": f"{L.WEB_INF_LIB_OUTPUT_PREFIX}/{d.name}/{folder_rel}",
+                "engine": "weblogic-rule12",
                 "artifact_id": artifact_id,
                 "current_version": cur_ver,
-                "analysis": decision["reason"],
+                "commit_tickets": commit_keys,
+                "fix_tickets": fix_keys,
             }
-        else:
-            # No JIRA-fix evidence → download baseline (Nexus) + target
-            # (Artifactory) -sources.jar and 3-way diff vs the customer's
-            # exploded sources, then warn with the code delta (rule 12.2).
-            base_warn = (
-                f"No related TA/PD JIRA marked Resolved=Fixed with a Fix Version in "
-                f"({cur_ver}, {target_version or '?'}] — this must be reported to Core."
+
+            # JIRA first.
+            dec = (
+                decide_from_jira(infos, cur_ver, target_version)
+                if target_version else None
             )
-            jar_diff: dict | None = None
-            diff_note = ""
-            try:
-                customer_java = _read_customer_java(d)
-                baseline_java = (
-                    _read_java_from_jar(
-                        sources_url(nexus_base, artifact_id, cur_ver), None
-                    )
-                    if nexus_base else None
-                )
-                target_pair = (
-                    _resolve_target_sources(art_base, artifact_id, target_version, art_auth)
-                    if (art_base and target_version) else None
-                )
-                if baseline_java is not None and target_pair is not None:
-                    tgt_ver, target_java = target_pair
-                    jar_diff = diff_java_trees(customer_java, baseline_java, target_java)
-                    jar_diff["baseline_version"] = cur_ver
-                    jar_diff["target_version"] = tgt_ver
-                    c, u = jar_diff["customizations"], jar_diff["upstream"]
-                    if not jar_diff["customer_customized"]:
-                        diff_note = (
-                            f" No customer customization vs {cur_ver} sources; target "
-                            f"{tgt_ver} changed {len(u['modified'])} file(s) — likely "
-                            "safe to take from target (confirm with Core)."
-                        )
-                    else:
-                        diff_note = (
-                            f" Customer delta vs {cur_ver}: {len(c['modified'])} modified, "
-                            f"{len(c['added'])} added, {len(c['removed'])} removed; target "
-                            f"{tgt_ver} changed {len(u['modified'])} file(s). Report to Core."
-                        )
-                else:
-                    diff_note = " (Source-jar download unavailable — code delta not computed.)"
-            except Exception as e:  # noqa: BLE001 — diff is best-effort
-                _log.warning("rule12: source-jar diff failed for %s: %s", d.name, e)
-                diff_note = " (Source-jar diff failed.)"
+            if dec:
+                results[fkey] = {
+                    **fbase,
+                    "decision": "Remove",
+                    "forced_decision": "Remove",
+                    "basis": "jira",
+                    "jira_key": dec["jira_key"],
+                    "fix_version": dec["fix_version"],
+                    "analysis": dec["reason"],
+                }
+                continue
 
-            entry = {
-                **base,
-                "decision": "Retain",
-                "forced_decision": "Retain",
-                "copy_as_is": True,
-                "commit_tickets": commit_keys,
-                "fix_tickets": fix_ticket_keys,
-                "artifact_id": artifact_id,
-                "current_version": cur_ver,
-                "core_warning": base_warn + diff_note,
-                "analysis": base_warn + diff_note,
-            }
-            if jar_diff is not None:
-                entry["jar_diff"] = jar_diff
-            results[key] = entry
+            # Else: source-jar diff fallback for this file (rule 12.2).
+            _ensure_sources()
+            try:
+                cust_src = jf.read_text(encoding="utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                cust_src = None
+            base_src = (_srcs["baseline"] or {}).get(folder_rel) if _srcs["baseline"] else None
+            tgt_src = (_srcs["target"] or {}).get(folder_rel) if _srcs["target"] else None
+            ddec = decide_from_diff(cust_src, base_src, tgt_src)
+            if ddec["remove"]:
+                results[fkey] = {
+                    **fbase,
+                    "decision": "Remove",
+                    "forced_decision": "Remove",
+                    "basis": "diff",
+                    "target_version": _srcs["tgt_ver"],
+                    "analysis": ddec["reason"],
+                }
+            else:
+                # No decision (not Remove/Retain/Merge) — blank the decision and
+                # surface a "report to Core" note, mirroring the DB warning.
+                results[fkey] = {
+                    **fbase,
+                    "decision": "",
+                    "basis": "diff",
+                    "target_version": _srcs["tgt_ver"],
+                    "core_warning": ddec["reason"],
+                    "analysis": ddec["reason"],
+                }
 
     return results

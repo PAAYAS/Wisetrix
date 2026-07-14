@@ -51,8 +51,10 @@ def _pending_decisions(project: dict) -> set[str]:
     """Which decisions produce delivery output for this mode.
 
     Docker: only Merge (Retain artifacts stay in the customer's Docker repo).
-    WebLogic: Merge + Retain — a Docker delivery is assembled from a
-    differently laid-out source, so Retain artifacts must be copied too.
+    WebLogic: Merge + Retain — a Docker delivery is assembled from a differently
+    laid-out source, so Retain artifacts must be copied too. Blank-decision
+    rule-12 files (report to Core) are intentionally excluded — they're left for
+    Core to resolve, not auto-included.
     """
     return {"Merge", "Retain"} if _is_weblogic(project) else {"Merge"}
 

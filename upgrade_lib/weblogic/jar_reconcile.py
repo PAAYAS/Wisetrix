@@ -141,6 +141,39 @@ def diff_java_trees(
     }
 
 
+# Message appended to every "report to Core" outcome.
+REPORT_TO_CORE = "This needs to be reported to Core."
+
+
+def decide_from_diff(
+    customer: str | None,
+    baseline: str | None,
+    target: str | None,
+) -> dict:
+    """Decide a single file by comparing sources (rule 12.2 fallback).
+
+    Used when JIRA gives no fix evidence: download the baseline (current version)
+    and target source files and compare against the customer's copy.
+
+      * customer == target                 -> remove (already in target)
+      * customer == baseline (unmodified)  -> remove (safe to take from target)
+      * customer differs from target       -> NOT removed (report to Core)
+      * cannot compare (sources missing)   -> NOT removed (report to Core)
+
+    Returns {"remove": bool, "reason": ...}. When ``remove`` is False the caller
+    leaves the decision blank and surfaces ``reason`` as a "report to Core" note.
+    """
+    if customer is not None and target is not None and _norm_java(customer) == _norm_java(target):
+        return {"remove": True, "reason": "Customer source identical to target — take from target."}
+    if customer is not None and baseline is not None and _norm_java(customer) == _norm_java(baseline):
+        return {"remove": True, "reason": "Customer source unmodified (== current baseline) — take from target."}
+    if target is None and baseline is None:
+        return {"remove": False, "reason": f"Baseline/target sources unavailable — cannot compare. {REPORT_TO_CORE}"}
+    if target is None:
+        return {"remove": False, "reason": f"File absent in target sources — customer-specific. {REPORT_TO_CORE}"}
+    return {"remove": False, "reason": f"Customer source differs from target (customization not upstream). {REPORT_TO_CORE}"}
+
+
 def decide_from_jira(
     jira_infos: list[dict],
     cur_version: str,

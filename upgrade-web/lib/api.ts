@@ -164,7 +164,7 @@ export interface ComparisonResult {
   name: string;
   rel_path: string;
   source_rel: string;
-  decision: Decision;
+  decision: Decision | "";   // "" = no decision (rule-12 "report to Core")
   file_count?: number;
   file_decisions?: Record<string, string>;
   target_exists?: boolean;
@@ -175,6 +175,7 @@ export interface ComparisonResult {
   risk_score?: number;
   decision_note?: string;
   db_warning?: string;
+  core_warning?: string;   // rule-12: "This needs to be reported to Core"
   no_customer_content_note?: string;
   error?: string;
   decided_at?: string;

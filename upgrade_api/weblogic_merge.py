@@ -46,23 +46,35 @@ def _copy_artifact(
     out_rel = entry.get("output_rel") or (
         f"{entry.get('bucket', '')}/{entry.get('rel_path', '')}"
     )
-    out_dir = out_app_root / out_rel
 
     emit("copy_start", key=key)
+    # Per-file Remove (rule 12 jar folders): files fixed upstream are dropped
+    # from the copy. Only applies when file_decisions is present.
+    remove_files = {
+        f for f, dec in (entry.get("file_decisions") or {}).items()
+        if dec == "Remove"
+    }
     copied: list[str] = []
-    if src.is_dir():
-        for p in sorted(src.rglob("*")):
-            if not p.is_file():
-                continue
-            rel = p.relative_to(src)
-            dst = out_dir / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(p, dst)
-            copied.append(rel.as_posix())
-    elif src.is_file():
-        out_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, out_dir / src.name)
-        copied.append(src.name)
+    if src.is_file():
+        # output_rel is the full file path (per-file rule-12 entries).
+        dst = out_app_root / out_rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        copied.append(dst.name)
+        out_dir = dst.parent
+    else:
+        out_dir = out_app_root / out_rel
+        if src.is_dir():
+            for p in sorted(src.rglob("*")):
+                if not p.is_file():
+                    continue
+                rel = p.relative_to(src)
+                if rel.as_posix() in remove_files:
+                    continue  # fixed upstream — dropped
+                dst = out_dir / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(p, dst)
+                copied.append(rel.as_posix())
 
     emit("copied", key=key, files=len(copied), out_dir=str(out_dir))
 
@@ -136,7 +148,7 @@ def perform_weblogic_merge(
             "removed": True,
         }
 
-    # Retain / copy-as-is → verbatim copy into the delivery tree.
+    # Retain / copy-as-is → copy into the delivery tree.
     if forced == "Retain" or entry.get("copy_as_is") or decision == "Retain":
         return _copy_artifact(key, entry, out_app_root, emit)
 

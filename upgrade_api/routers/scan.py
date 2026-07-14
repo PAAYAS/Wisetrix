@@ -484,18 +484,39 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
         await asyncio.sleep(0)
 
     # ── Rule 12 (WebLogic): WEB-INF/lib source-JAR reconciliation ────────────
-    # Lives outside plugins/IMPLEMENTATION, so it needs the git clone root.
-    # Best-effort: never let it break the scan.
+    # Per-.java-file decision (commit → linked TA/PDSUPPORT → fixed-in-window →
+    # Remove). Lives outside plugins/IMPLEMENTATION, so it needs the git clone
+    # root. Streams a "Comparing <jar>" progress event per jar. Best-effort.
     if (project.get("upgrade_mode") or "docker") == "weblogic":
         repo_root = (resolved.get("_git_metadata") or {}).get("clone_dir")
         if repo_root:
-            yield {"event": "phase", "data": json.dumps({"phase": "rule12_jars"})}
-            try:
-                from upgrade_api.weblogic_jars import reconcile_web_inf_lib
+            loop = asyncio.get_running_loop()
+            jar_queue: asyncio.Queue = asyncio.Queue()
+            _JAR_DONE = object()
 
-                jar_results = await anyio.to_thread.run_sync(
-                    lambda: reconcile_web_inf_lib(repo_root, project)
+            def _jar_cb(phase: str, data: dict) -> None:
+                loop.call_soon_threadsafe(
+                    jar_queue.put_nowait, {"phase": phase, **data}
                 )
+
+            async def _run_jars() -> dict:
+                try:
+                    from upgrade_api.weblogic_jars import reconcile_web_inf_lib
+
+                    return await anyio.to_thread.run_sync(
+                        lambda: reconcile_web_inf_lib(repo_root, project, _jar_cb)
+                    )
+                finally:
+                    loop.call_soon_threadsafe(jar_queue.put_nowait, _JAR_DONE)
+
+            jar_task = asyncio.create_task(_run_jars())
+            while True:
+                item = await jar_queue.get()
+                if item is _JAR_DONE:
+                    break
+                yield {"event": "phase", "data": json.dumps(item)}
+            try:
+                jar_results = await jar_task
                 comp_results.update(jar_results)
                 logger.info(
                     "compare_stream: rule12 added %d WEB-INF/lib jar(s) for %s",
