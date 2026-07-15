@@ -263,16 +263,38 @@ def perform_merge(
         f for f in (set(customer_files) | set(system_files))
         if f.endswith("_diff.json")
     }
-    exclude_from_llm = large_json | diff_json
+    # ── ALL JSON → deterministic 3-way merge (not just large files) ───────────
+    # The LLM is unreliable on structured JSON: it silently drops customer
+    # records/fields and misses SYSTEM upgrade additions. json_merge.py does an
+    # exact, size-independent 3-way merge that preserves customizations by
+    # construction, so every .json (except _diff.json) is handled deterministically
+    # and excluded from the LLM.
+    json_files = {
+        f for f in (set(customer_files) | set(system_files))
+        if f.lower().endswith(".json") and not f.lower().endswith("_diff.json")
+    }
+    # ── .txt / text metadata → verbatim passthrough from source ──────────────
+    # security.txt, report_setup_info.txt, component_info.txt, etc. are NOT
+    # semantic merges — copy them straight from the customer source (or SYSTEM if
+    # only there). Never send them to the LLM.
+    passthrough = {
+        f for f in (set(customer_files) | set(system_files))
+        if f.lower().endswith(".txt")
+    }
+    exclude_from_llm = large_json | diff_json | json_files | passthrough
     llm_customer = {f: c for f, c in customer_files.items() if f not in exclude_from_llm}
     llm_system = {f: c for f, c in system_files.items() if f not in exclude_from_llm}
     llm_baseline = {
         f: c for f, c in (baseline_files or {}).items() if f not in exclude_from_llm
     } or None
-    if large_json:
-        emit("large_json_deterministic", key=key, files=sorted(large_json))
-        _log.info("[merge] %s: %d large JSON routed to deterministic (skipped LLM): %s",
-                  key, len(large_json), sorted(large_json))
+    if json_files:
+        emit("json_deterministic", key=key, files=sorted(json_files))
+        _log.info("[merge] %s: %d JSON routed to deterministic merge (skipped LLM): %s",
+                  key, len(json_files), sorted(json_files))
+    if passthrough:
+        emit("text_passthrough", key=key, files=sorted(passthrough))
+        _log.info("[merge] %s: %d text file(s) copied verbatim from source (skipped LLM): %s",
+                  key, len(passthrough), sorted(passthrough))
     if diff_json:
         emit("diff_json_excluded_from_llm", key=key, files=sorted(diff_json))
         _log.info("[merge] %s: %d _diff.json excluded from LLM (handled by diff pipeline): %s",
@@ -308,6 +330,17 @@ def perform_merge(
         _log.warning("[merge] deterministic fill failed for %s: %s", key, exc)
         filled = []
 
+    # ── Verbatim passthrough for .txt / text-metadata files ──────────────────
+    # Copied straight from the customer source (or SYSTEM if only there), exactly
+    # as authored — never touched by the LLM. Overlaid after the deterministic
+    # fill so they always land in the output unchanged.
+    for f in sorted(passthrough):
+        content = customer_files.get(f)
+        if content is None:
+            content = system_files.get(f)
+        if content is not None:
+            artifact_files[f] = content
+
     # WebLogic entries carry an explicit output_rel (app_root-relative path in
     # the Docker delivery layout). Docker entries omit it → out_root/bucket/rel.
     out_dir = (
@@ -330,35 +363,46 @@ def perform_merge(
         quality_result = qr.to_dict()
         emit("quality_done", key=key, verdict=qr.verdict)
 
-    # ── Deterministic safety net: detect dropped pure-additions ─────────────
-    # Catches the case where the LLM merge silently lost a line that one side
-    # genuinely added (e.g. SYSTEM's new submitWorkToCMG call, or a customer
-    # customization). Non-blocking, but surfaces as WARN findings so the
-    # engineer sees it instead of shipping a wrong merge.
+    # ── Safety net: detect dropped additions in the LLM-merged files ────────
+    # Catches code the LLM silently lost (a dropped method/import/statement, or
+    # an XML element). Scoped to LLM-merged files only: JSON is merged
+    # deterministically (correct by construction) and .txt is copied verbatim, so
+    # guarding those produces false positives — e.g. a customer-DELETED record
+    # that SYSTEM also modified looks like a "dropped SYSTEM addition" but the
+    # merge correctly honored the deletion.
+    _GUARD_EXTS = {".java", ".js", ".jsp", ".groovy", ".xml"}
     dropped: list[dict] = []
     try:
         from upgrade_lib.quality.customization_guard import detect_dropped_additions
 
+        guard_files = {
+            f: c for f, c in artifact_files.items()
+            if Path(f).suffix.lower() in _GUARD_EXTS
+        }
         dropped = detect_dropped_additions(
-            customer_files, system_files, baseline_files, artifact_files
+            customer_files, system_files, baseline_files, guard_files
         )
     except Exception as exc:  # noqa: BLE001 — never let the guard break a merge
         _log.warning("[merge] customization guard failed for %s: %s", key, exc)
-    if dropped:
-        emit("customization_warning", key=key, count=len(dropped))
+    # Real drops (code/XML methods, statements, elements) that survived the
+    # merge agent's retry-on-drop loop are a correctness failure — block them so
+    # a compile-breaking / customization-losing merge never ships to the build.
+    real_drops = [d for d in dropped if d.get("kind") not in ("skipped", "truncated")]
+    if real_drops:
+        emit("customization_dropped", key=key, count=len(real_drops))
         if quality_result is None:
-            quality_result = {"verdict": "WARN", "findings": [], "blocking": False}
+            quality_result = {"verdict": "PASS", "findings": [], "blocking": False}
         findings = quality_result.setdefault("findings", [])
-        for d in dropped:
+        for d in real_drops:
             findings.append({
-                "severity": "WARNING",
+                "severity": "ERROR",
                 "category": "dropped_addition",
                 "file": d["file"],
                 "line": None,
                 "message": d["message"],
             })
-        if quality_result.get("verdict") == "PASS":
-            quality_result["verdict"] = "WARN"
+        quality_result["verdict"] = "FAIL"
+        quality_result["blocking"] = True
 
     diff_info = None
     diff_error: str | None = None

@@ -48,15 +48,10 @@ def _is_weblogic(project: dict) -> bool:
 
 
 def _pending_decisions(project: dict) -> set[str]:
-    """Which decisions produce delivery output for this mode.
-
-    Docker: only Merge (Retain artifacts stay in the customer's Docker repo).
-    WebLogic: Merge + Retain — a Docker delivery is assembled from a differently
-    laid-out source, so Retain artifacts must be copied too. Blank-decision
-    rule-12 files (report to Core) are intentionally excluded — they're left for
-    Core to resolve, not auto-included.
-    """
-    return {"Merge", "Retain"} if _is_weblogic(project) else {"Merge"}
+    """Decisions shown in the main merge queue — actual merges only, for both
+    modes. WebLogic Retain artifacts are copied into the delivery via the
+    separate 'copy retained' step (see _retained_stream), not this queue."""
+    return {"Merge"}
 
 
 def _merge_fn(project: dict):
@@ -114,12 +109,40 @@ def list_merges(project_id: str) -> dict:
         for k, v in comp.items()
         if v.get("decision") in wanted and k not in merges
     }
+    # WebLogic: Retain artifacts are copied into the delivery via a separate
+    # step. Surface how many are still pending so the UI can offer it.
+    retained_pending = {
+        k: v
+        for k, v in comp.items()
+        if _is_weblogic(project)
+        and v.get("decision") == "Retain"
+        and k not in merges
+    }
     return {
         "pending": pending,
         "done": merges,
         "pending_count": len(pending),
         "done_count": len(merges),
+        "retained_pending": retained_pending,
+        "retained_pending_count": len(retained_pending),
     }
+
+
+# NOTE: the /retained/stream routes must be declared BEFORE the greedy
+# /{key:path} routes below, or FastAPI would match them as an artifact key.
+@router.get("/retained/stream")
+async def retained_stream_get(project_id: str):
+    """SSE: copy all pending Retain artifacts into the WebLogic Docker delivery."""
+    return EventSourceResponse(
+        _merge_stream(project_id, decisions={"Retain"}, skip_diff=True)
+    )
+
+
+@router.post("/retained/stream")
+async def retained_stream_post(project_id: str):
+    return EventSourceResponse(
+        _merge_stream(project_id, decisions={"Retain"}, skip_diff=True)
+    )
 
 
 @router.post("/{key:path}")
@@ -169,11 +192,14 @@ async def _merge_stream(
     project_id: str,
     only_keys: list[str] | None = None,
     skip_diff: bool = True,
+    decisions: set[str] | None = None,
 ) -> AsyncIterator[dict]:
     """Stream merge progress.
 
-    If `only_keys` is set, merge just those keys (re-runs even if already merged).
-    Otherwise merge every pending artifact from the comparison.
+    If `only_keys` is set, process just those keys (re-runs even if already done).
+    Otherwise process every pending artifact whose decision is in `decisions`
+    (defaults to the mode's merge-queue set — actual merges). Pass
+    `decisions={"Retain"}` for the WebLogic "copy retained" step.
     """
     project = _project_or_404(project_id)
     yield {"event": "phase", "data": json.dumps({"phase": "resolve"})}
@@ -255,7 +281,7 @@ async def _merge_stream(
             return
         pending_items = [(k, comp[k]) for k in only_keys]
     else:
-        wanted = _pending_decisions(project)
+        wanted = decisions if decisions is not None else _pending_decisions(project)
         pending_items = [
             (k, v)
             for k, v in comp.items()

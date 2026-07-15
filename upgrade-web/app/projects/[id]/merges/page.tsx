@@ -173,7 +173,7 @@ export default function MergesPage({ params }: { params: { id: string } }) {
     });
   };
 
-  const mergeAll = () => {
+  const runBulk = (streamUrl: string) => {
     if (bulk.running) return;
     const batchStart = Date.now();
     setBulk({
@@ -188,7 +188,7 @@ export default function MergesPage({ params }: { params: { id: string } }) {
       batchStartedAt: batchStart,
       batchDurationMs: 0,
     });
-    const es = new EventSource(api.mergeAllStreamUrl(id));
+    const es = new EventSource(streamUrl);
     es.addEventListener("scan", (e) => {
       const d = JSON.parse((e as MessageEvent).data);
       setBulk((b) => ({ ...b, total: d.total }));
@@ -252,6 +252,9 @@ export default function MergesPage({ params }: { params: { id: string } }) {
       void reload();
     });
   };
+
+  const mergeAll = () => runBulk(api.mergeAllStreamUrl(id));
+  const copyRetained = () => runBulk(api.retainedStreamUrl(id));
 
   const pct = bulk.total > 0 ? (bulk.index / bulk.total) * 100 : 0;
   const pending = data?.pending ?? {};
@@ -328,6 +331,17 @@ export default function MergesPage({ params }: { params: { id: string } }) {
               ? `Merging ${bulk.index}/${bulk.total}…`
               : `Merge all (${pendingRows.length})`}
           </Button>
+          {(data?.retained_pending_count ?? 0) > 0 && (
+            <Button
+              variant="secondary"
+              onClick={copyRetained}
+              disabled={bulk.running}
+              title="Copy Retain artifacts verbatim into the Docker delivery"
+            >
+              <Package className="h-4 w-4" />
+              Copy retained ({data?.retained_pending_count})
+            </Button>
+          )}
         </div>
       </header>
 

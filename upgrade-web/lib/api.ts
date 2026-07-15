@@ -219,6 +219,9 @@ export interface MergeListResponse {
   done: Record<string, MergeRecord>;
   pending_count: number;
   done_count: number;
+  // WebLogic only: Retain artifacts copied into the delivery via a separate step.
+  retained_pending?: ComparisonMap;
+  retained_pending_count?: number;
 }
 
 export interface SummaryMetrics {
@@ -486,6 +489,9 @@ export const api = {
     ),
   mergeAllStreamUrl: (id: string) =>
     `${STREAM_BASE}/projects/${encodeURIComponent(id)}/merges/stream`,
+  /** SSE URL for the WebLogic "copy retained artifacts into the delivery" step. */
+  retainedStreamUrl: (id: string) =>
+    `${STREAM_BASE}/projects/${encodeURIComponent(id)}/merges/retained/stream`,
   mergeOneStreamUrl: (id: string, key: string) =>
     `${STREAM_BASE}/projects/${encodeURIComponent(id)}/merges/${encodeURIComponent(key)}/stream`,
   mergeDownloadAllUrl: (id: string) =>
