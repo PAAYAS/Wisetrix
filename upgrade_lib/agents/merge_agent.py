@@ -160,6 +160,61 @@ def _turns_for_files(total_files: int, total_bytes: int = 0) -> int:
     return max(30, min(base, 200))
 
 
+def _detect_drops(
+    customer_files: dict[str, str] | None,
+    system_files: dict[str, str] | None,
+    baseline_files: dict[str, str] | None,
+    merged_files: dict[str, str],
+) -> list[dict]:
+    """Real dropped additions (method/statement/element) in the merged output,
+    excluding the guard's own skipped/truncated meta entries. No-op without a
+    baseline. Never raises."""
+    if not baseline_files:
+        return []
+    try:
+        from upgrade_lib.quality.customization_guard import detect_dropped_additions
+
+        found = detect_dropped_additions(
+            customer_files or {}, system_files or {}, baseline_files, merged_files
+        )
+        return [d for d in found if d.get("kind") not in ("skipped", "truncated")]
+    except Exception:  # noqa: BLE001 — detection must never break a merge
+        return []
+
+
+def _format_retry_prompt(missing: list[str], dropped: list[dict]) -> str:
+    """Build a targeted re-merge prompt listing files still missing and, per
+    file, the specific additions the merge dropped — so Claude fixes exactly
+    what's wrong instead of redoing everything blindly."""
+    parts = [
+        "Your previous merge output is INCOMPLETE or dropped content. Do NOT "
+        "summarize and do NOT stop. Use Read/Write against the SAME "
+        "./customer, ./system, ./baseline and ./merged directories.",
+    ]
+    if missing:
+        parts.append(
+            f"\nThese files are still missing from ./merged/ — merge and Write "
+            f"each: {missing}"
+        )
+    if dropped:
+        by_file: dict[str, list[str]] = {}
+        for d in dropped:
+            by_file.setdefault(d.get("file", "?"), []).append(str(d.get("message", "")))
+        parts.append(
+            "\nThe following additions were DROPPED and MUST be restored. "
+            "Re-merge each file so BOTH the customer's customizations AND SYSTEM "
+            "26.2's upgrade changes are present (never keep only one side):"
+        )
+        for fname, msgs in by_file.items():
+            parts.append(f"  {fname}:")
+            for m in msgs[:10]:
+                parts.append(f"    - {m}")
+            if len(msgs) > 10:
+                parts.append(f"    - …and {len(msgs) - 10} more in this file.")
+    parts.append('\nWhen every file is correct, reply with a single JSON object: {"explanation": "..."}.')
+    return "\n".join(parts)
+
+
 class MergeAgent(BaseAgent):
     agent_name = "merge"
     system_prompt_file = "merge_system.md"
@@ -244,25 +299,20 @@ class MergeAgent(BaseAgent):
 
             merged_files: dict[str, str] = {}
             raw = ""
+            missing: set[str] = set()
+            dropped: list[dict] = []
             for attempt in range(1, self._MERGE_COMPLETION_ATTEMPTS + 1):
                 if attempt == 1:
                     prompt_to_send = prompt
                 else:
-                    missing = sorted(expected - set(_read_tree(merged_dir)))
+                    # Re-prompt for BOTH missing files and dropped additions
+                    # (methods/statements/elements the merge silently lost).
                     _log.warning(
-                        "[merge] Incomplete output (attempt %d): %d file(s) still "
-                        "missing, re-prompting: %s",
-                        attempt - 1, len(missing), missing,
+                        "[merge] Incomplete/incorrect output (attempt %d): "
+                        "%d missing, %d dropped — re-prompting",
+                        attempt - 1, len(missing), len(dropped),
                     )
-                    prompt_to_send = (
-                        "Your previous response did NOT write all files to ./merged/. "
-                        "Do NOT summarize and do NOT stop — use the Write tool now. "
-                        "The customer/, system/, and baseline/ inputs are unchanged in "
-                        "this same working directory. These files still need to be "
-                        f"written to ./merged/ (relative paths): {missing}. "
-                        "Apply the merge policy to each and Write it, then reply with a "
-                        'single JSON object: {"explanation": "..."}.'
-                    )
+                    prompt_to_send = _format_retry_prompt(sorted(missing), dropped)
 
                 raw = self._call(
                     prompt_to_send,
@@ -274,14 +324,20 @@ class MergeAgent(BaseAgent):
                     estimated_file_count=total_files,
                 )
 
-                # Read merged files back from disk
+                # Read merged files back from disk and check completeness +
+                # dropped additions (code/XML). JSON/.txt aren't staged here —
+                # they're handled deterministically upstream.
                 merged_files = _read_tree(merged_dir)
-                _log.info(
-                    "[merge] Claude wrote %d merged files (attempt %d, %d expected)",
-                    len(merged_files), attempt, len(expected),
+                missing = expected - set(merged_files)
+                dropped = _detect_drops(
+                    customer_files, system_files, baseline_files, merged_files
                 )
-                if merged_files and not (expected - set(merged_files)):
-                    break  # every expected file is present — done
+                _log.info(
+                    "[merge] attempt %d: wrote %d/%d files, %d missing, %d dropped",
+                    attempt, len(merged_files), len(expected), len(missing), len(dropped),
+                )
+                if merged_files and not missing and not dropped:
+                    break  # complete and nothing dropped — done
 
             # Extract explanation (best-effort — the merged files are the source of truth)
             explanation = ""
