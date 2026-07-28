@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator
@@ -63,6 +64,7 @@ from upgrade_api.paths import (
     resolved_paths_path,
     risk_path,
     save_json,
+    timings_path,
 )
 from upgrade_api.scan_util import resolve_project_paths, scan_artifacts
 from upgrade_api.state import load_projects
@@ -356,6 +358,7 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
     """Yield SSE events while running the deterministic compare pipeline."""
     project = _get_project(project_id)
     logger.info("compare_stream: starting for project=%s", project_id)
+    _t0 = time.monotonic()
 
     yield {"event": "phase", "data": json.dumps({"phase": "resolve"})}
     try:
@@ -515,6 +518,16 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
     cat_counts: dict[str, int] = {f"CAT{i}": 0 for i in range(1, 6)}
     for r in cat_results.values():
         cat_counts[f"CAT{r.get('level', 3)}"] = cat_counts.get(f"CAT{r.get('level', 3)}", 0) + 1
+
+    # Record the compare wall-clock. A fresh compare supersedes prior merges,
+    # so reset the merge timer — total tool time is rebuilt as merges re-run.
+    elapsed = round(time.monotonic() - _t0, 1)
+    save_json(timings_path(project_id), {
+        "compare_seconds": elapsed,
+        "compare_at": datetime.now(timezone.utc).isoformat(),
+        "merge_seconds": 0.0,
+        "merge_at": None,
+    })
 
     yield {
         "event": "done",

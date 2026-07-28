@@ -42,6 +42,22 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from upgrade_lib.quality.cat_classifier import estimate_effort
+
+
+def _fmt_duration(seconds: float | int | None) -> str:
+    """Human-friendly duration, e.g. 8s / 3m 12s / 1h 04m."""
+    if not seconds or seconds < 0:
+        return "0s"
+    s = int(round(seconds))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}m"
+    if m:
+        return f"{m}m {sec:02d}s"
+    return f"{sec}s"
+
 
 # --------------------------------------------------------------------------- #
 # Theme
@@ -661,6 +677,79 @@ def _section_risk(comparison: dict[str, Any], risks: dict[str, Any] | None) -> l
     return flow
 
 
+def _section_time_effort(
+    comparison: dict[str, Any],
+    timings: dict[str, Any] | None,
+) -> list[Any]:
+    """Measured tool run-time + estimated effort to complete the upgrade."""
+    timings = timings or {}
+    compare_s = timings.get("compare_seconds")
+    merge_s = timings.get("merge_seconds")
+    eff = estimate_effort(comparison)
+
+    flow: list[Any] = [Paragraph("Upgrade Time &amp; Effort", STYLES["H1"])]
+
+    # ── Measured tool run-time ──────────────────────────────────────────────
+    if compare_s is not None or merge_s is not None:
+        c = compare_s or 0
+        m = merge_s or 0
+        flow.append(Paragraph(
+            "How long the tool itself took to run (measured wall-clock).",
+            STYLES["SmallMuted"],
+        ))
+        flow.append(Spacer(1, 6))
+        rt_rows = [
+            [Paragraph("Scan &amp; compare", STYLES["Cell"]),
+             Paragraph(_fmt_duration(c), STYLES["Cell"])],
+            [Paragraph("Merge", STYLES["Cell"]),
+             Paragraph(_fmt_duration(m), STYLES["Cell"])],
+            [Paragraph("<b>Total tool time</b>", STYLES["Cell"]),
+             Paragraph(f"<b>{_fmt_duration(c + m)}</b>", STYLES["Cell"])],
+        ]
+        flow.append(_styled_table(
+            ["Stage", "Duration"], rt_rows,
+            [2.2 * inch, 1.4 * inch], align=["left", "center"],
+        ))
+        flow.append(Spacer(1, 8))
+    else:
+        flow.append(Paragraph(
+            "Tool run-time not recorded yet — run a scan/compare (and merge) "
+            "to capture it.",
+            STYLES["SmallMuted"],
+        ))
+        flow.append(Spacer(1, 8))
+
+    # ── Estimated manual effort, without the tool ───────────────────────────
+    flow.append(Paragraph(
+        f"<b>Estimated manual effort (without the tool): "
+        f"~{eff['total_days']} person-days</b> (~{eff['total_hours']:.0f} h) to "
+        f"reconcile the {eff['counted']} carried-forward artifact(s) by hand — "
+        "contrast with the tool run-time above. Rough planning figure from each "
+        "artifact's CAT level (CAT1 lowest → CAT5 highest effort); excludes "
+        "Removed artifacts.",
+        STYLES["SmallMuted"],
+    ))
+    flow.append(Spacer(1, 6))
+    eff_rows = []
+    for lvl in range(1, 6):
+        row = eff["per_cat"][lvl]
+        if row["count"]:
+            fg, _bg = _CAT_COLORS[lvl]
+            eff_rows.append([
+                _badge(f"CAT{lvl}", fg, _bg, 0.6 * inch),
+                Paragraph(row["loe"], STYLES["Cell"]),
+                Paragraph(str(row["count"]), STYLES["Cell"]),
+                Paragraph(f"{row['hours']:g}", STYLES["Cell"]),
+            ])
+    if eff_rows:
+        flow.append(_styled_table(
+            ["CAT", "Effort", "Artifacts", "Est. manual hours"], eff_rows,
+            [0.8 * inch, 1.3 * inch, 1.1 * inch, 1.5 * inch],
+            align=["left", "left", "center", "center"],
+        ))
+    return flow
+
+
 def _section_cat(comparison: dict[str, Any]) -> list[Any]:
     """CAT 1-5 configuration-severity distribution (E2open GTM scale)."""
     by_cat, uf_yes = _count_cats(comparison)
@@ -859,6 +948,13 @@ def _section_artifact_overview(
         rows,
         [artifact_w, 0.85 * inch, 0.75 * inch, 0.85 * inch, 1.0 * inch],
         align=["left", "center", "center", "center", "left"],
+    ))
+    flow.append(Spacer(1, 4))
+    flow.append(Paragraph(
+        "CAT = configuration-severity level (CAT1 self-service → CAT5 custom code). "
+        "<b>UF</b> = Upgrade-Friendly: the configuration is expected to migrate forward "
+        "cleanly across upgrades; its absence means likely re-work on upgrade.",
+        STYLES["SmallMuted"],
     ))
     return flow
 
@@ -1076,6 +1172,7 @@ def render_pdf(
     jira_state: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     jira_tickets: dict[str, str] | None = None,
+    timings: dict[str, Any] | None = None,
 ) -> bytes:
     """
     Render the upgrade report as a polished PDF and return the bytes.
@@ -1105,6 +1202,8 @@ def render_pdf(
     story: list[Any] = []
     story += _section_cover(project_id, metadata, comparison, risks or {}, merges or {})
     story += _section_decisions(comparison or {})
+    story.append(Spacer(1, 0.15 * inch))
+    story += _section_time_effort(comparison or {}, timings)
     story.append(Spacer(1, 0.15 * inch))
     story += _section_risk(comparison or {}, risks)
     story.append(Spacer(1, 0.15 * inch))

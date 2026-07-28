@@ -52,6 +52,19 @@ _CAT_LABELS: dict[int, str] = {
     5: "Custom Application Development",
 }
 
+# CAT level -> level-of-effort bucket + a rough estimate of the MANUAL
+# person-hours to reconcile ONE such artifact for an upgrade *without* this
+# tool (review the customer's customization against the new core, re-apply /
+# re-test). Mapped from the matrix "LOE" column (CAT1 XS … CAT4 L, CAT5 XL).
+# Deliberately coarse planning numbers, tunable here in one place — they are
+# the "manual baseline" the tool's measured run-time is contrasted against.
+_CAT_LOE: dict[int, str] = {
+    1: "Minimal", 2: "Small", 3: "Moderate", 4: "Significant", 5: "Major",
+}
+CAT_EFFORT_HOURS: dict[int, float] = {1: 0.25, 2: 1.0, 3: 2.0, 4: 4.0, 5: 8.0}
+# Person-hours in a working day, for the hours→days rollup.
+EFFORT_HOURS_PER_DAY = 8.0
+
 
 # --------------------------------------------------------------------------- #
 # Base map: artifact top-level ``category`` -> CatRule.
@@ -192,4 +205,43 @@ class CatClassifier:
         return counts
 
 
-__all__ = ["CatClassifier", "CatAssessment", "CatRule", "CAT_MAP"]
+def estimate_effort(comparison: dict) -> dict:
+    """Rough person-effort estimate to *complete* the upgrade.
+
+    Sums a per-CAT hours estimate (``CAT_EFFORT_HOURS``) over every artifact
+    that carries forward — i.e. decision is not ``Remove`` (removed artifacts
+    are dropped and need no work). Returns a coarse planning figure, not a
+    commitment.
+
+    Returns a dict with:
+      total_hours, total_days, counted (artifacts costed),
+      per_cat: {1..5: {"count", "hours", "loe"}}.
+    """
+    per_cat: dict[int, dict] = {
+        i: {"count": 0, "hours": 0.0, "loe": _CAT_LOE[i]} for i in range(1, 6)
+    }
+    total_hours = 0.0
+    counted = 0
+    for entry in comparison.values():
+        if (entry or {}).get("decision") == "Remove":
+            continue
+        lvl = (entry or {}).get("cat_level")
+        if not isinstance(lvl, int) or not (1 <= lvl <= 5):
+            continue
+        hrs = CAT_EFFORT_HOURS[lvl]
+        per_cat[lvl]["count"] += 1
+        per_cat[lvl]["hours"] += hrs
+        total_hours += hrs
+        counted += 1
+    return {
+        "total_hours": round(total_hours, 1),
+        "total_days": round(total_hours / EFFORT_HOURS_PER_DAY, 1),
+        "counted": counted,
+        "per_cat": per_cat,
+    }
+
+
+__all__ = [
+    "CatClassifier", "CatAssessment", "CatRule", "CAT_MAP",
+    "CAT_EFFORT_HOURS", "estimate_effort",
+]

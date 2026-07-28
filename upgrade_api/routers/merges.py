@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
 from urllib.parse import quote
@@ -32,6 +34,7 @@ from upgrade_api.paths import (
     resolved_paths_path,
     risk_path,
     save_json,
+    timings_path,
 )
 from upgrade_api.scan_util import resolve_project_paths
 from upgrade_api.state import load_projects
@@ -152,6 +155,7 @@ async def _merge_stream(
     Otherwise merge every pending artifact from the comparison.
     """
     project = _project_or_404(project_id)
+    _t0 = time.monotonic()
     yield {"event": "phase", "data": json.dumps({"phase": "resolve"})}
 
     # Fast path: the most recent scan persisted resolved paths to
@@ -338,6 +342,14 @@ async def _merge_stream(
                 "data": json.dumps({"key": key, "error": result["error"]}),
             }
         await asyncio.sleep(0)
+
+    # Accumulate merge wall-clock into the run timings (compare reset it to 0),
+    # so the report's total tool-time reflects every merge run this session.
+    _t = load_json(timings_path(project_id), {}) or {}
+    _t["merge_seconds"] = round(float(_t.get("merge_seconds") or 0.0)
+                                + (time.monotonic() - _t0), 1)
+    _t["merge_at"] = datetime.now(timezone.utc).isoformat()
+    save_json(timings_path(project_id), _t)
 
     yield {
         "event": "done",

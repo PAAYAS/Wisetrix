@@ -44,6 +44,11 @@ def cat_path(project_id: str) -> Path:
     return RUN_STATE_DIR / f"{_safe_id(project_id)}.cat.json"
 
 
+def timings_path(project_id: str) -> Path:
+    """Wall-clock durations of the last scan/compare and merge runs."""
+    return RUN_STATE_DIR / f"{_safe_id(project_id)}.timings.json"
+
+
 def jira_tickets_path(project_id: str) -> Path:
     return RUN_STATE_DIR / f"{_safe_id(project_id)}.jira_tickets.json"
 

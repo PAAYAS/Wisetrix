@@ -20,7 +20,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from upgrade_lib.quality.cat_classifier import estimate_effort
 from upgrade_lib.report.pdf_renderer import render_pdf
+
+
+def _fmt_duration(seconds: float | int | None) -> str:
+    """Human-friendly duration, e.g. 8s / 3m 12s / 1h 04m."""
+    if not seconds or seconds < 0:
+        return "0s"
+    s = int(round(seconds))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}m"
+    if m:
+        return f"{m}m {sec:02d}s"
+    return f"{sec}s"
 
 
 # CAT 1-5 canonical names (E2open GTM configuration-severity scale).
@@ -56,6 +71,7 @@ class ReportGenerator:
         jira_state: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
         jira_tickets: dict[str, str] | None = None,
+        timings: dict[str, Any] | None = None,
     ) -> str:
         """
         Generate the full UPGRADE_REPORT.md content.
@@ -77,6 +93,7 @@ class ReportGenerator:
             self._header(project_id, metadata),
             self._artifact_table(comparison, risks, jira_tickets),
             self._decision_summary(comparison),
+            self._time_and_effort(comparison, timings),
             self._risk_distribution(comparison, risks),
             self._cat_distribution(comparison),
             self._quality_gate_summary(merges),
@@ -110,6 +127,7 @@ class ReportGenerator:
         jira_state: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
         jira_tickets: dict[str, str] | None = None,
+        timings: dict[str, Any] | None = None,
     ) -> bytes:
         """
         Render the report directly as a polished PDF using reportlab.
@@ -127,6 +145,7 @@ class ReportGenerator:
             jira_state=jira_state,
             metadata=metadata,
             jira_tickets=jira_tickets,
+            timings=timings,
         )
 
     # ---- section builders -----------------------------------------------------
@@ -205,6 +224,59 @@ class ReportGenerator:
                 pct = f"{count / total * 100:.1f}" if total else "0"
                 lines.append(f"| {dec} | {count} | {pct}% |")
 
+        return "\n".join(lines)
+
+    @staticmethod
+    def _time_and_effort(
+        comparison: dict[str, Any],
+        timings: dict[str, Any] | None,
+    ) -> str:
+        """Actual tool run-time + estimated effort to complete the upgrade."""
+        timings = timings or {}
+        compare_s = timings.get("compare_seconds")
+        merge_s = timings.get("merge_seconds")
+        eff = estimate_effort(comparison)
+
+        lines = ["## Upgrade Time & Effort", ""]
+
+        # ── Actual tool run-time (measured wall-clock) ──────────────────────
+        if compare_s is not None or merge_s is not None:
+            c = compare_s or 0
+            m = merge_s or 0
+            lines += [
+                "**Tool run-time (measured)** — how long the tool itself took:",
+                "",
+                "| Stage | Duration |",
+                "|-------|---------|",
+                f"| Scan & compare | {_fmt_duration(c)} |",
+                f"| Merge | {_fmt_duration(m)} |",
+                f"| **Total tool time** | **{_fmt_duration(c + m)}** |",
+                "",
+            ]
+        else:
+            lines += [
+                "_Tool run-time not recorded yet — run a scan/compare (and merge) "
+                "to capture it._",
+                "",
+            ]
+
+        # ── Estimated manual effort, without the tool (from CAT levels) ─────
+        lines += [
+            f"**Estimated manual effort (without the tool): ~{eff['total_days']} "
+            f"person-days** (~{eff['total_hours']:.0f} h) to reconcile the "
+            f"{eff['counted']} carried-forward artifact(s) by hand — vs the tool "
+            "run-time above. Rough planning figure from each artifact's CAT level "
+            "(CAT1 lowest → CAT5 highest effort); excludes Removed artifacts.",
+            "",
+            "| CAT | Effort | Artifacts | Est. manual hours |",
+            "|-----|--------|----------:|------------------:|",
+        ]
+        for lvl in range(1, 6):
+            row = eff["per_cat"][lvl]
+            if row["count"]:
+                lines.append(
+                    f"| CAT{lvl} | {row['loe']} | {row['count']} | {row['hours']:g} |"
+                )
         return "\n".join(lines)
 
     @staticmethod
