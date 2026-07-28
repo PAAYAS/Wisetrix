@@ -17,6 +17,7 @@ import {
   api,
   ApiError,
   type ArtifactListResponse,
+  type CatLevel,
   type ComparisonMap,
   type ComparisonResult,
   type Decision,
@@ -24,6 +25,7 @@ import {
   type RiskLevel,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -36,6 +38,7 @@ import { Input } from "@/components/ui/input";
 
 const DECISIONS: Decision[] = ["Merge", "Retain", "Remove", "ERROR"];
 const RISKS: RiskLevel[] = ["HIGH", "MEDIUM", "LOW"];
+const CATS: CatLevel[] = [1, 2, 3, 4, 5];
 
 /** Labels shown in the compare-run progress card */
 const PHASE_LABELS: Record<string, string> = {
@@ -44,6 +47,7 @@ const PHASE_LABELS: Record<string, string> = {
   compare: "Comparing against target version…",
   rollup: "Applying business rules…",
   risk: "Scoring risk for each artifact…",
+  categorize: "Categorizing artifacts (CAT 1-5)…",
   done: "Done",
 };
 
@@ -69,6 +73,7 @@ interface ProgressState {
   doneSummary?: {
     decision_counts: Record<string, number>;
     risk_counts: Record<string, number>;
+    cat_counts: Record<string, number>;
   };
 }
 
@@ -120,6 +125,7 @@ export default function ScanPage({ params }: { params: { id: string } }) {
     new Set(),
   );
   const [riskFilter, setRiskFilter] = React.useState<Set<RiskLevel>>(new Set());
+  const [catFilter, setCatFilter] = React.useState<Set<CatLevel>>(new Set());
   const [search, setSearch] = React.useState("");
 
   // Ref so we can close the EventSource on unmount or when we re-trigger load
@@ -279,6 +285,7 @@ export default function ScanPage({ params }: { params: { id: string } }) {
         doneSummary: {
           decision_counts: data.decision_counts ?? {},
           risk_counts: data.risk_counts ?? {},
+          cat_counts: data.cat_counts ?? {},
         },
       }));
       toast.success(`Compared ${data.total} artifacts`);
@@ -310,15 +317,23 @@ export default function ScanPage({ params }: { params: { id: string } }) {
             : false,
       )
       .filter((r) =>
+        catFilter.size === 0
+          ? true
+          : r.cat_level
+            ? catFilter.has(r.cat_level)
+            : false,
+      )
+      .filter((r) =>
         search.trim()
           ? r.source_rel.toLowerCase().includes(search.trim().toLowerCase())
           : true,
       )
       .sort((a, b) => a.source_rel.localeCompare(b.source_rel));
-  }, [comparison, decisionFilter, riskFilter, search]);
+  }, [comparison, decisionFilter, riskFilter, catFilter, search]);
 
   const counts = React.useMemo(() => countByDecision(comparison), [comparison]);
   const riskCounts = React.useMemo(() => countByRisk(comparison), [comparison]);
+  const catCounts = React.useMemo(() => countByCat(comparison), [comparison]);
 
   const pct = progress.total > 0 ? (progress.index / progress.total) * 100 : 0;
   // Recompute elapsed when tick changes — keeps the timer fresh.
@@ -535,6 +550,13 @@ export default function ScanPage({ params }: { params: { id: string } }) {
                     <RiskBadge key={k} level={k as RiskLevel} count={n} />
                   ),
                 )}
+                {CATS.map((c) => (
+                  <CatBadge
+                    key={`cat${c}`}
+                    level={c}
+                    count={progress.doneSummary?.cat_counts?.[`CAT${c}`] ?? 0}
+                  />
+                ))}
               </div>
             )}
           </CardContent>
@@ -575,6 +597,21 @@ export default function ScanPage({ params }: { params: { id: string } }) {
                 </FilterChip>
               ))}
             </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs uppercase tracking-wider text-muted-foreground">
+                CAT
+              </span>
+              {CATS.map((c) => (
+                <FilterChip
+                  key={`cat${c}`}
+                  active={catFilter.has(c)}
+                  onClick={() => setCatFilter((s) => toggle(s, c))}
+                >
+                  CAT{c}{" "}
+                  <span className="opacity-60">· {catCounts[c] ?? 0}</span>
+                </FilterChip>
+              ))}
+            </div>
             <div className="ml-auto flex w-full max-w-xs items-center gap-2 sm:w-auto">
               <Search className="h-4 w-4 text-muted-foreground" />
               <Input
@@ -587,41 +624,61 @@ export default function ScanPage({ params }: { params: { id: string } }) {
           </div>
 
           <Card>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <div className="w-full">
+              <table className="w-full table-fixed text-sm">
+                <colgroup>
+                  <col className="w-[11%]" />
+                  <col className="w-[27%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[6%]" />
+                  <col className="w-[30%]" />
+                </colgroup>
                 <thead className="bg-muted/40 text-left text-xs uppercase tracking-wider text-muted-foreground">
                   <tr>
-                    <th className="px-4 py-2 font-medium">Bucket</th>
-                    <th className="px-4 py-2 font-medium">Artifact</th>
-                    <th className="px-4 py-2 font-medium">Decision</th>
-                    <th className="px-4 py-2 font-medium">Risk</th>
-                    <th className="px-4 py-2 font-medium">Files</th>
-                    <th className="px-4 py-2 font-medium">Notes</th>
+                    <th className="px-3 py-2 font-medium">Bucket</th>
+                    <th className="px-3 py-2 font-medium">Artifact</th>
+                    <th className="px-3 py-2 font-medium">Decision</th>
+                    <th className="px-3 py-2 font-medium">Risk</th>
+                    <th className="px-3 py-2 font-medium">CAT</th>
+                    <th className="px-3 py-2 font-medium">Files</th>
+                    <th className="px-3 py-2 font-medium">Notes</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/40">
                   {rows.map((r) => (
-                    <tr key={r.key} className="hover:bg-muted/30">
-                      <td className="px-4 py-2 text-muted-foreground">
+                    <tr key={r.key} className="hover:bg-muted/30 align-top">
+                      <td className="break-words px-3 py-2 text-muted-foreground">
                         {r.bucket}
                       </td>
-                      <td className="px-4 py-2 font-mono text-xs">
+                      <td className="break-all px-3 py-2 font-mono text-xs">
                         {r.rel_path}
                       </td>
-                      <td className="px-4 py-2">
+                      <td className="whitespace-nowrap px-3 py-2">
                         <DecisionBadge decision={r.decision} />
                       </td>
-                      <td className="px-4 py-2">
+                      <td className="whitespace-nowrap px-3 py-2">
                         {r.risk_level ? (
                           <RiskBadge level={r.risk_level} />
                         ) : (
                           <span className="text-muted-foreground">—</span>
                         )}
                       </td>
-                      <td className="px-4 py-2 text-muted-foreground">
+                      <td className="whitespace-nowrap px-3 py-2">
+                        {r.cat_level ? (
+                          <CatBadge
+                            level={r.cat_level}
+                            upgradeFriendly={r.cat_upgrade_friendly}
+                          />
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-muted-foreground">
                         {r.file_count ?? "—"}
                       </td>
-                      <td className="px-4 py-2 text-muted-foreground">
+                      <td className="break-words px-3 py-2 text-muted-foreground">
                         {r.decision_note ?? r.error ?? r.analysis ?? ""}
                         {r.db_warning && (
                           <div className="mt-1 inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300">
@@ -639,7 +696,7 @@ export default function ScanPage({ params }: { params: { id: string } }) {
                   {rows.length === 0 && (
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={7}
                         className="px-4 py-6 text-center text-muted-foreground"
                       >
                         No matches.
@@ -744,6 +801,56 @@ function RiskBadge({ level, count }: { level: RiskLevel; count?: number }) {
   );
 }
 
+/** Colour gradient CAT1 (green, safe) → CAT5 (rose, custom code). */
+const CAT_STYLES: Record<CatLevel, string> = {
+  1: "border-transparent bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30",
+  2: "border-transparent bg-teal-500/15 text-teal-300 ring-1 ring-teal-500/30",
+  3: "border-transparent bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30",
+  4: "border-transparent bg-orange-500/15 text-orange-300 ring-1 ring-orange-500/30",
+  5: "border-transparent bg-rose-500/15 text-rose-300 ring-1 ring-rose-500/30",
+};
+
+const CAT_TITLES: Record<CatLevel, string> = {
+  1: "CAT1 · Self-Service Setting — customer admin/user",
+  2: "CAT2 · Pre-Defined Configuration — Solution Architect / e2open",
+  3: "CAT3 · Extension Configuration — Implementation / Engineering Lead",
+  4: "CAT4 · Complex Model Configuration — Eng Lead + R&D/Product",
+  5: "CAT5 · Custom Application Development — R&D / roadmap",
+};
+
+function CatBadge({
+  level,
+  upgradeFriendly,
+  count,
+}: {
+  level: CatLevel;
+  upgradeFriendly?: boolean;
+  count?: number;
+}) {
+  return (
+    <Badge
+      variant={"outline" as never}
+      className={cn(CAT_STYLES[level])}
+      title={CAT_TITLES[level]}
+    >
+      CAT{level}
+      {upgradeFriendly != null && (
+        <span
+          className="ml-1 opacity-70"
+          title={
+            upgradeFriendly
+              ? "Upgrade-friendly — migrates forward cleanly"
+              : "Not upgrade-friendly — likely re-work on upgrade"
+          }
+        >
+          {upgradeFriendly ? "✓" : "✗"}
+        </span>
+      )}
+      {count != null && <span className="ml-1 opacity-70">· {count}</span>}
+    </Badge>
+  );
+}
+
 function countByDecision(comparison: ComparisonMap) {
   const out: Partial<Record<Decision, number>> = {};
   for (const r of Object.values(comparison) as ComparisonResult[]) {
@@ -756,6 +863,14 @@ function countByRisk(comparison: ComparisonMap) {
   const out: Partial<Record<RiskLevel, number>> = {};
   for (const r of Object.values(comparison) as ComparisonResult[]) {
     if (r.risk_level) out[r.risk_level] = (out[r.risk_level] ?? 0) + 1;
+  }
+  return out;
+}
+
+function countByCat(comparison: ComparisonMap) {
+  const out: Partial<Record<CatLevel, number>> = {};
+  for (const r of Object.values(comparison) as ComparisonResult[]) {
+    if (r.cat_level) out[r.cat_level] = (out[r.cat_level] ?? 0) + 1;
   }
   return out;
 }

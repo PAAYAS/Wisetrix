@@ -57,6 +57,7 @@ def _art_version_cached(version: str) -> bool:
     return False
 
 from upgrade_api.paths import (
+    cat_path,
     comparison_path,
     load_json,
     resolved_paths_path,
@@ -66,6 +67,7 @@ from upgrade_api.paths import (
 from upgrade_api.scan_util import resolve_project_paths, scan_artifacts
 from upgrade_api.state import load_projects
 from upgrade_lib.compare import apply_business_rules, compare_artifact_local
+from upgrade_lib.quality.cat_classifier import CatClassifier
 from upgrade_lib.quality.risk_scorer import RiskScorer
 
 
@@ -344,6 +346,12 @@ def get_risk(project_id: str) -> dict:
     return load_json(risk_path(project_id), {})
 
 
+@router.get("/cat")
+def get_cat(project_id: str) -> dict:
+    _get_project(project_id)
+    return load_json(cat_path(project_id), {})
+
+
 async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
     """Yield SSE events while running the deterministic compare pipeline."""
     project = _get_project(project_id)
@@ -476,8 +484,25 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
         comp_results[key]["risk_level"] = ra.level
         comp_results[key]["risk_score"] = ra.score
 
+    # ── CAT 1-5 configuration-severity classification (deterministic) ────────
+    yield {"event": "phase", "data": json.dumps({"phase": "categorize"})}
+    classifier = CatClassifier()
+    cat_results: dict[str, dict] = {}
+    for key, result in comp_results.items():
+        ca = classifier.classify(result)
+        cat_results[key] = {
+            "level": ca.level,
+            "upgrade_friendly": ca.upgrade_friendly,
+            "label": ca.label,
+            "factors": ca.factors,
+        }
+        comp_results[key]["cat_level"] = ca.level
+        comp_results[key]["cat_upgrade_friendly"] = ca.upgrade_friendly
+        comp_results[key]["cat_label"] = ca.label
+
     save_json(comparison_path(project_id), comp_results)
     save_json(risk_path(project_id), risk_results)
+    save_json(cat_path(project_id), cat_results)
 
     counts: dict[str, int] = {}
     for r in comp_results.values():
@@ -487,6 +512,9 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
     for r in risk_results.values():
         lvl = r.get("level", "LOW")
         risk_counts[lvl] = risk_counts.get(lvl, 0) + 1
+    cat_counts: dict[str, int] = {f"CAT{i}": 0 for i in range(1, 6)}
+    for r in cat_results.values():
+        cat_counts[f"CAT{r.get('level', 3)}"] = cat_counts.get(f"CAT{r.get('level', 3)}", 0) + 1
 
     yield {
         "event": "done",
@@ -495,6 +523,7 @@ async def _compare_stream(project_id: str) -> AsyncIterator[dict]:
                 "total": total,
                 "decision_counts": counts,
                 "risk_counts": risk_counts,
+                "cat_counts": cat_counts,
             }
         ),
     }

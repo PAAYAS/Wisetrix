@@ -39,6 +39,11 @@ def risk_path(project_id: str) -> Path:
     return RUN_STATE_DIR / f"{_safe_id(project_id)}.risks.json"
 
 
+def cat_path(project_id: str) -> Path:
+    """CAT 1-5 configuration-severity classification per artifact."""
+    return RUN_STATE_DIR / f"{_safe_id(project_id)}.cat.json"
+
+
 def jira_tickets_path(project_id: str) -> Path:
     return RUN_STATE_DIR / f"{_safe_id(project_id)}.jira_tickets.json"
 

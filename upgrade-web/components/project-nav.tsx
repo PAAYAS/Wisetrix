@@ -70,7 +70,7 @@ export function ProjectNav({ projectId }: { projectId: string }) {
   const active = TABS.find((t) => pathname?.includes(`/${t.match}`))?.match;
 
   return (
-    <nav className="sticky top-0 z-30 -mx-4 mb-4 border-b border-border/60 bg-background/80 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+    <nav className="sticky top-0 z-30 mb-4 border-b border-border/60 bg-background/80 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container max-w-7xl">
         <div className="flex flex-wrap items-center gap-1 text-sm">
           <Link

@@ -224,6 +224,35 @@ def _risk_badge(level: str) -> Any:
     return Paragraph("—", STYLES["Cell"])
 
 
+# CAT 1-5 colour gradient (green = safe/self-service → red = custom code).
+_CAT_COLORS: dict[int, tuple[HexColor, HexColor]] = {
+    1: (HexColor("#388E3C"), HexColor("#E8F5E9")),  # green
+    2: (HexColor("#00897B"), HexColor("#E0F2F1")),  # teal
+    3: (HexColor("#F57C00"), HexColor("#FFF4E5")),  # amber
+    4: (HexColor("#E64A19"), HexColor("#FBE9E7")),  # deep orange
+    5: (HexColor("#D32F2F"), HexColor("#FDECEA")),  # red
+}
+
+_CAT_NAMES: dict[int, str] = {
+    1: "Self-Service Setting",
+    2: "Pre-Defined Configuration",
+    3: "Extension Configuration",
+    4: "Complex Model Configuration",
+    5: "Custom Application Development",
+}
+
+
+def _cat_badge(entry: dict[str, Any]) -> Any:
+    """CAT badge for an artifact; appends 'UF' when upgrade-friendly."""
+    lvl = entry.get("cat_level")
+    if not isinstance(lvl, int) or not (1 <= lvl <= 5):
+        return Paragraph("—", STYLES["Cell"])
+    fg, bg = _CAT_COLORS[lvl]
+    uf = entry.get("cat_upgrade_friendly")
+    text = f"CAT{lvl} UF" if uf else f"CAT{lvl}"
+    return _badge(text, fg, bg, 0.75 * inch)
+
+
 def _decision_badge(decision: str) -> Any:
     d = (decision or "").strip()
     if d == "Merge":
@@ -632,6 +661,48 @@ def _section_risk(comparison: dict[str, Any], risks: dict[str, Any] | None) -> l
     return flow
 
 
+def _section_cat(comparison: dict[str, Any]) -> list[Any]:
+    """CAT 1-5 configuration-severity distribution (E2open GTM scale)."""
+    by_cat, uf_yes = _count_cats(comparison)
+    total = sum(by_cat.values())
+    if total == 0:
+        return []
+
+    flow: list[Any] = []
+    flow.append(Paragraph("CAT Distribution", STYLES["H1"]))
+    flow.append(Paragraph(
+        "Configuration-severity per E2open's GTM CAT 1-5 scale: CAT1 self-service "
+        "settings through CAT5 custom application development. 'UF' marks artifacts "
+        f"expected to migrate forward cleanly — {uf_yes} of {total} here.",
+        STYLES["SmallMuted"],
+    ))
+    flow.append(Spacer(1, 6))
+
+    rows = []
+    for lvl in range(1, 6):
+        count = by_cat[lvl]
+        pct = count / total * 100
+        bar_w = max(0.05, pct / 100) * 2.5 * inch
+        fg, _bg = _CAT_COLORS[lvl]
+        bar = Table([[""]], colWidths=[bar_w], rowHeights=[0.18 * inch])
+        bar.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), fg)]))
+        rows.append([
+            _badge(f"CAT{lvl}", fg, _bg, 0.6 * inch),
+            Paragraph(_CAT_NAMES[lvl], STYLES["Cell"]),
+            Paragraph(f"<b>{count}</b>", STYLES["Cell"]),
+            Paragraph(f"{pct:.1f}%", STYLES["Cell"]),
+            bar,
+        ])
+
+    flow.append(_styled_table(
+        ["CAT", "Category", "Count", "%", "Distribution"],
+        rows,
+        [0.7 * inch, 2.0 * inch, 0.7 * inch, 0.7 * inch, CONTENT_W - 4.1 * inch],
+        align=["left", "left", "center", "center", "left"],
+    ))
+    return flow
+
+
 def _section_quality(merges: dict[str, Any]) -> list[Any]:
     if not merges:
         return []
@@ -756,7 +827,7 @@ def _section_artifact_overview(
     flow: list[Any] = []
     flow.append(Paragraph("Artifact Overview", STYLES["H1"]))
     flow.append(Paragraph(
-        f"Full list of {len(comparison)} artifacts with decision, risk and JIRA linkage.",
+        f"Full list of {len(comparison)} artifacts with decision, risk, CAT and JIRA linkage.",
         STYLES["SmallMuted"],
     ))
     flow.append(Spacer(1, 6))
@@ -777,16 +848,17 @@ def _section_artifact_overview(
             Paragraph(_md_inline(_clip_text(full_path, 300)), STYLES["Cell"]),
             _decision_badge(decision),
             _risk_badge(risk_level),
+            _cat_badge(entry),
             Paragraph(_md_inline(_clip_csv(jira_key, max_items=6)), STYLES["CellMono"]),
         ])
 
     # Calibrated column widths that sum to CONTENT_W
-    artifact_w = CONTENT_W - (0.85 + 0.75 + 1.1) * inch
+    artifact_w = CONTENT_W - (0.85 + 0.75 + 0.85 + 1.0) * inch
     flow.append(_styled_table(
-        ["Artifact", "Decision", "Risk", "JIRA"],
+        ["Artifact", "Decision", "Risk", "CAT", "JIRA"],
         rows,
-        [artifact_w, 0.85 * inch, 0.75 * inch, 1.1 * inch],
-        align=["left", "center", "center", "left"],
+        [artifact_w, 0.85 * inch, 0.75 * inch, 0.85 * inch, 1.0 * inch],
+        align=["left", "center", "center", "center", "left"],
     ))
     return flow
 
@@ -960,6 +1032,19 @@ def _count_risks(risks: dict[str, Any] | None) -> dict[str, int]:
     return out
 
 
+def _count_cats(comparison: dict[str, Any] | None) -> tuple[dict[int, int], int]:
+    """Return (counts by CAT level, number upgrade-friendly)."""
+    out: dict[int, int] = {i: 0 for i in range(1, 6)}
+    uf_yes = 0
+    for entry in (comparison or {}).values():
+        lvl = (entry or {}).get("cat_level")
+        if isinstance(lvl, int) and 1 <= lvl <= 5:
+            out[lvl] += 1
+            if (entry or {}).get("cat_upgrade_friendly"):
+                uf_yes += 1
+    return out, uf_yes
+
+
 def _count_quality_issues(merges: dict[str, Any]) -> int:
     n = 0
     for m in merges.values():
@@ -1022,6 +1107,8 @@ def render_pdf(
     story += _section_decisions(comparison or {})
     story.append(Spacer(1, 0.15 * inch))
     story += _section_risk(comparison or {}, risks)
+    story.append(Spacer(1, 0.15 * inch))
+    story += _section_cat(comparison or {})
     story.append(Spacer(1, 0.15 * inch))
     story += _section_quality(merges or {})
     story.append(Spacer(1, 0.15 * inch))
