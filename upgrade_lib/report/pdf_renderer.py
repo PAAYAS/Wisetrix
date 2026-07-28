@@ -774,10 +774,10 @@ def _section_artifact_overview(
         jira_key = (jira_tickets or {}).get(key, "—") if jira_tickets else "—"
 
         rows.append([
-            Paragraph(_md_inline(full_path), STYLES["Cell"]),
+            Paragraph(_md_inline(_clip_text(full_path, 300)), STYLES["Cell"]),
             _decision_badge(decision),
             _risk_badge(risk_level),
-            Paragraph(_md_inline(str(jira_key)), STYLES["CellMono"]),
+            Paragraph(_md_inline(_clip_csv(jira_key, max_items=6)), STYLES["CellMono"]),
         ])
 
     # Calibrated column widths that sum to CONTENT_W
@@ -840,11 +840,11 @@ def _section_merge_details(
             [Paragraph("<b>Bucket</b>", STYLES["Small"]),
              Paragraph(_md_inline(bucket), STYLES["Small"])],
             [Paragraph("<b>JIRA</b>", STYLES["Small"]),
-             Paragraph(_md_inline(str(jira_key)), STYLES["CellMono"])],
+             Paragraph(_md_inline(_clip_csv(jira_key, max_items=8)), STYLES["CellMono"])],
             [Paragraph("<b>Merged at</b>", STYLES["Small"]),
              Paragraph(_md_inline(merged_at), STYLES["Small"])],
             [Paragraph("<b>Files</b>", STYLES["Small"]),
-             Paragraph(_md_inline(", ".join(files) or "—"), STYLES["Small"])],
+             Paragraph(_md_inline(_clip_csv(", ".join(files), max_items=40) or "—"), STYLES["Small"])],
             [Paragraph("<b>_diff.json</b>", STYLES["Small"]),
              Paragraph(_md_inline(diff_state), STYLES["Small"])],
         ]
@@ -921,6 +921,26 @@ def _section_jira(jira_state: dict[str, Any] | None) -> list[Any]:
 # --------------------------------------------------------------------------- #
 # Helpers — counters
 # --------------------------------------------------------------------------- #
+
+def _clip_csv(value: Any, max_items: int = 8) -> str:
+    """Cap a comma-separated list so a table cell can never grow taller than a
+    page. Artifacts can match 100+ JIRA tickets or contain 100s of files; a
+    single cell that tall crashes ReportLab (it can't split one row across
+    pages). Shows the first N items + a '(+X more)' summary."""
+    s = str(value if value is not None else "").strip()
+    if not s or s == "—":
+        return s or "—"
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    if len(parts) <= max_items:
+        return ", ".join(parts)
+    return ", ".join(parts[:max_items]) + f"  …(+{len(parts) - max_items} more)"
+
+
+def _clip_text(value: Any, max_chars: int = 300) -> str:
+    """Hard length cap for a single free-text cell (defensive)."""
+    s = str(value if value is not None else "")
+    return s if len(s) <= max_chars else s[: max_chars - 1] + "…"
+
 
 def _count_decisions(comparison: dict[str, Any]) -> dict[str, int]:
     out: dict[str, int] = {}
