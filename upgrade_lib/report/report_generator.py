@@ -23,6 +23,26 @@ from typing import Any
 from upgrade_lib.report.pdf_renderer import render_pdf
 
 
+# CAT 1-5 canonical names (E2open GTM configuration-severity scale).
+_CAT_NAMES: dict[int, str] = {
+    1: "Self-Service Setting",
+    2: "Pre-Defined Configuration",
+    3: "Extension Configuration",
+    4: "Complex Model Configuration",
+    5: "Custom Application Development",
+}
+
+
+def _cat_cell(entry: dict[str, Any]) -> str:
+    """Render an artifact's CAT for a table cell: e.g. 'CAT3 ✓' / 'CAT4 ✗'."""
+    lvl = entry.get("cat_level")
+    if not isinstance(lvl, int) or not (1 <= lvl <= 5):
+        return "—"
+    uf = entry.get("cat_upgrade_friendly")
+    marker = "" if uf is None else (" ✓" if uf else " ✗")
+    return f"CAT{lvl}{marker}"
+
+
 class ReportGenerator:
     """Generates UPGRADE_REPORT.md from upgrade run data."""
 
@@ -58,6 +78,7 @@ class ReportGenerator:
             self._artifact_table(comparison, risks, jira_tickets),
             self._decision_summary(comparison),
             self._risk_distribution(comparison, risks),
+            self._cat_distribution(comparison),
             self._quality_gate_summary(merges),
             self._high_risk_merges(merges, risks),
             self._merge_details(merges, jira_tickets),
@@ -132,12 +153,12 @@ class ReportGenerator:
         risks: dict[str, Any] | None,
         jira_tickets: dict[str, str] | None,
     ) -> str:
-        """Full artifact table with Decision, Risk, and JIRA columns."""
+        """Full artifact table with Decision, Risk, CAT, and JIRA columns."""
         lines = [
             "## Artifact Overview",
             "",
-            "| Artifact | Bucket | Decision | Risk | JIRA |",
-            "|----------|--------|----------|------|------|",
+            "| Artifact | Bucket | Decision | Risk | CAT | JIRA |",
+            "|----------|--------|----------|------|-----|------|",
         ]
         for key, entry in sorted(comparison.items(), key=lambda x: x[0]):
             name = entry.get("name", key.split("/")[-1] if "/" in key else key)
@@ -147,10 +168,13 @@ class ReportGenerator:
             if risks:
                 r = risks.get(key, {})
                 risk_level = r.get("level", "—") if isinstance(r, dict) else "—"
+            cat = _cat_cell(entry)
             jira_key = "Not Found"
             if jira_tickets:
                 jira_key = jira_tickets.get(key, "Not Found")
-            lines.append(f"| {name} | {bucket} | {decision} | {risk_level} | {jira_key} |")
+            lines.append(
+                f"| {name} | {bucket} | {decision} | {risk_level} | {cat} | {jira_key} |"
+            )
         return "\n".join(lines)
 
     @staticmethod
@@ -208,6 +232,38 @@ class ReportGenerator:
             pct = f"{count / total * 100:.1f}" if total else "0"
             icon = {"HIGH": "!!!", "MEDIUM": "!!", "LOW": "OK"}.get(level, "")
             lines.append(f"| {icon} {level} | {count} | {pct}% |")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _cat_distribution(comparison: dict[str, Any]) -> str:
+        """CAT 1-5 configuration-severity distribution (E2open GTM scale)."""
+        by_cat: dict[int, int] = {i: 0 for i in range(1, 6)}
+        uf_yes = 0
+        for entry in comparison.values():
+            lvl = entry.get("cat_level")
+            if isinstance(lvl, int) and 1 <= lvl <= 5:
+                by_cat[lvl] += 1
+                if entry.get("cat_upgrade_friendly"):
+                    uf_yes += 1
+
+        total = sum(by_cat.values())
+        if total == 0:
+            return ""
+
+        lines = [
+            "## CAT Distribution",
+            "",
+            "Configuration-severity classification (E2open GTM CAT 1-5). "
+            f"**{uf_yes} of {total}** artifacts are upgrade-friendly.",
+            "",
+            "| CAT | Category | Count | % |",
+            "|-----|----------|------:|--:|",
+        ]
+        for lvl in range(1, 6):
+            count = by_cat[lvl]
+            pct = f"{count / total * 100:.1f}" if total else "0"
+            lines.append(f"| CAT{lvl} | {_CAT_NAMES[lvl]} | {count} | {pct}% |")
 
         return "\n".join(lines)
 

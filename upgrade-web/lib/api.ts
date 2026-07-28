@@ -158,6 +158,9 @@ export interface ArtifactListResponse {
 export type Decision = "Merge" | "Retain" | "Remove" | "ERROR";
 export type RiskLevel = "HIGH" | "MEDIUM" | "LOW";
 
+/** CAT 1-5 configuration-severity level (E2open GTM classification). */
+export type CatLevel = 1 | 2 | 3 | 4 | 5;
+
 export interface ComparisonResult {
   bucket: string;
   category: string;
@@ -173,6 +176,9 @@ export interface ComparisonResult {
   engine?: string;
   risk_level?: RiskLevel;
   risk_score?: number;
+  cat_level?: CatLevel;
+  cat_upgrade_friendly?: boolean;
+  cat_label?: string;
   decision_note?: string;
   db_warning?: string;
   core_warning?: string;   // rule-12: "This needs to be reported to Core"
