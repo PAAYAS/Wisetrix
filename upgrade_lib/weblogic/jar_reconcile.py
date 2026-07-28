@@ -22,8 +22,18 @@ import re
 # Maven group path shared by all WEB-INF/lib source jars (confirmed constant).
 GROUP_PATH = "com/amberroad/solutions"
 
-# Resolution value that counts as "fixed upstream".
-FIXED_RESOLUTION = "fixed"
+# Resolution values (lowercased) that count as "resolved upstream" for the
+# no-Fix-Version fallback path (e.g. PDSUPPORT tickets with no Fix Version).
+RESOLVED_RESOLUTIONS = {"fixed", "done"}
+
+# Resolutions (lowercased) that explicitly mean the ticket was NOT fixed — even
+# a stray Fix Version on these must not trigger a Remove.
+NON_FIX_RESOLUTIONS = {
+    "won't fix", "wont fix", "won't do", "wont do",
+    "cannot reproduce", "can't reproduce", "cant reproduce",
+    "not a bug", "not a defect", "rejected", "declined",
+    "incomplete", "invalid", "as designed", "works as designed",
+}
 
 _JAR_FOLDER_RE = re.compile(r"^(?P<art>.+)-(?P<ver>\d[\d.]*)\.jar$", re.IGNORECASE)
 
@@ -177,24 +187,53 @@ def decide_from_jira(
 ) -> dict | None:
     """Decide Remove from JIRA evidence, or None if no ticket qualifies.
 
-    ``jira_infos`` = ``[{key, resolution, fix_versions:[...], summary?}]``.
-    Returns ``{"decision": "Remove", "reason": ..., "jira_key": ..., ...}`` when a
-    ticket is Resolution=Fixed with a Fix Version in ``(curVer, targetVer]``.
+    ``jira_infos`` = ``[{key, resolution, fix_versions:[...], summary?}]`` — the
+    linked TA/PDSUPPORT tickets (either project qualifies).
+
+    Rule (Fix-Version-first):
+      * A **Fix Version in ``(curVer, targetVer]``** means the fix shipped in a
+        release at/under the target → Remove — regardless of how the ticket was
+        closed (e.g. a ``Duplicate`` still carries the Fix Version of the release
+        that fixed it). The only exception is a resolution that explicitly means
+        "not fixed" (Won't Fix, Cannot Reproduce, Rejected, …).
+      * No Fix Version at all + Resolution Fixed/Done (common for PDSUPPORT) →
+        Remove (resolution alone).
+      * Fix Versions present but none in the window → NOT removed.
     """
+    fallback: dict | None = None
     for info in jira_infos:
-        resolution = str(info.get("resolution") or "").strip().lower()
-        if resolution != FIXED_RESOLUTION:
-            continue
-        for fv in info.get("fix_versions") or []:
-            if in_fix_window(fv, cur_version, target_version):
-                return {
-                    "decision": "Remove",
-                    "jira_key": info.get("key", ""),
-                    "fix_version": fv,
-                    "reason": (
-                        f"{info.get('key', 'ticket')} Resolved=Fixed with Fix "
-                        f"Version {fv} in ({cur_version}, {target_version}] — "
-                        "fix is already in the target; WEB-INF/lib copy removed."
-                    ),
-                }
-    return None
+        key = info.get("key", "")
+        resolution = str(info.get("resolution") or "").strip()
+        rlow = resolution.lower()
+        fix_versions = [fv for fv in (info.get("fix_versions") or []) if str(fv).strip()]
+
+        if fix_versions:
+            if rlow in NON_FIX_RESOLUTIONS:
+                continue  # explicitly not fixed — ignore its Fix Version
+            for fv in fix_versions:
+                if in_fix_window(fv, cur_version, target_version):
+                    res_note = resolution or "n/a"
+                    return {
+                        "decision": "Remove",
+                        "jira_key": key,
+                        "fix_version": fv,
+                        "reason": (
+                            f"{key or 'ticket'} has Fix Version {fv} in "
+                            f"({cur_version}, {target_version}] (Resolution={res_note}) — "
+                            "fix is in the target; WEB-INF/lib copy removed."
+                        ),
+                    }
+            continue  # has fix versions, none in window
+
+        # No Fix Version — resolution alone qualifies (Fixed/Done; e.g. PDSUPPORT).
+        if rlow in RESOLVED_RESOLUTIONS and fallback is None:
+            fallback = {
+                "decision": "Remove",
+                "jira_key": key,
+                "fix_version": None,
+                "reason": (
+                    f"{key or 'ticket'} Resolved={resolution} (no Fix Version) — "
+                    "treated as resolved upstream; WEB-INF/lib copy removed."
+                ),
+            }
+    return fallback
