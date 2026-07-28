@@ -25,6 +25,7 @@ from upgrade_api.paths import (
     risk_path,
     save_json,
     summary_path,
+    timings_path,
 )
 from upgrade_api.scan_util import resolve_project_paths
 from upgrade_api.state import load_projects
@@ -136,6 +137,7 @@ def _build_report_inputs(project_id: str, project: dict) -> dict:
         "summary_narrative": saved_summary.get("content"),
         "metadata": metadata,
         "jira_tickets": jira_tix if jira_tix else None,
+        "timings": load_json(timings_path(project_id), {}),
         "resolved": resolved,
     }
 
@@ -156,6 +158,7 @@ def build_report(project_id: str) -> dict:
         summary_narrative=inputs["summary_narrative"],
         metadata=inputs["metadata"],
         jira_tickets=inputs["jira_tickets"],
+        timings=inputs["timings"],
     )
 
     resolved = inputs["resolved"]
@@ -187,6 +190,7 @@ def report_pdf(project_id: str) -> Response:
         summary_narrative=inputs["summary_narrative"],
         metadata=inputs["metadata"],
         jira_tickets=inputs["jira_tickets"],
+        timings=inputs["timings"],
     )
     return Response(
         content=pdf,
@@ -210,6 +214,7 @@ def report_markdown(project_id: str) -> Response:
         summary_narrative=inputs["summary_narrative"],
         metadata=inputs["metadata"],
         jira_tickets=inputs["jira_tickets"],
+        timings=inputs["timings"],
     )
     return Response(
         content=md,
