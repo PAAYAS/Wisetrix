@@ -117,10 +117,13 @@ def _find_jar_url(base_url: str, auth: tuple | None = None) -> str:
 
     # Direct file link (e.g. a Nexus release jar, as used for the WebLogic
     # baseline): the URL already points at the artifact, not a directory to
-    # list. Use it as-is — the download step surfaces a clear HTTP error if it
-    # doesn't exist. No-op for Artifactory directory URLs (they don't end .jar).
+    # list. Still normalise a copied Artifactory *UI* URL (/ui/native/) to the
+    # download endpoint (/artifactory/) — the UI URL returns an HTML page, not
+    # the artifact, which later fails as "File is not a zip file". A genuine
+    # direct link (public Nexus baseline jar) has no /ui/native/, so this is a
+    # no-op for it. No-op too for directory URLs (they don't end .jar/.zip).
     if base_url.lower().endswith((".jar", ".zip")):
-        return base_url
+        return _ui_to_api_url(base_url)
 
     api_base = _ui_to_api_url(base_url)
     version = _version_from_url(base_url)
@@ -323,6 +326,24 @@ class ArtifactoryProvider(SourceProvider):
         dl_mb = round(downloaded / 1024 / 1024, 1)
         logger.info("Downloaded %.1f MB for version %s", dl_mb, version)
         _emit("download_done", downloaded_mb=dl_mb, msg=f"Download complete ({dl_mb} MB)")
+
+        # Guard: a wrong URL (e.g. an Artifactory /ui/native/ web-UI link, or an
+        # HTML error page returned with 200 OK) downloads bytes that aren't a
+        # JAR, so extraction later dies with a cryptic "File is not a zip file".
+        # Fail fast here with an actionable message instead.
+        if not zipfile.is_zipfile(jar_path):
+            snippet = ""
+            try:
+                snippet = jar_path.read_bytes()[:120].decode("utf-8", "replace").strip()
+            except Exception:
+                pass
+            raise ValueError(
+                f"Downloaded file for version {version} is not a valid JAR/ZIP "
+                f"({dl_mb} MB) from {jar_url}. The URL likely points at the "
+                f"Artifactory web UI (/ui/native/...) or an error page rather than "
+                f"the artifact — use the download endpoint (/artifactory/...). "
+                f"First bytes: {snippet!r}"
+            )
 
         # Extract (JAR is a ZIP).
         # We only need the SYSTEM artifacts tree — skip compiled Java classes,
